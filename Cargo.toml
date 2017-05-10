@@ -1,0 +1,21 @@
+[package]
+name = "redox_netstack"
+version = "0.1.0"
+
+[[bin]]
+name = "ipd"
+path = "src/ipd/main.rs"
+
+[[bin]]
+name = "tcpd"
+path = "src/tcpd/main.rs"
+
+[[bin]]
+name = "udpd"
+path = "src/udpd/main.rs"
+
+[dependencies]
+netutils = { git = "https://github.com/redox-os/netutils.git" }
+rand = "0.3"
+redox_event = "0.1"
+redox_syscall = "0.1"
