@@ -3,6 +3,10 @@ name = "redox_netstack"
 version = "0.1.0"
 
 [[bin]]
+name = "ethernetd"
+path = "src/ethernetd/main.rs"
+
+[[bin]]
 name = "ipd"
 path = "src/ipd/main.rs"
 
