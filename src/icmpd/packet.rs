@@ -19,6 +19,15 @@ pub struct MutPacket<'a> {
     payload: &'a mut [u8],
 }
 
+pub enum PacketKind {
+    EchoRequest,
+    EchoResponse,
+    HostUnreachable,
+    PortUnreachable,
+    ProtoUnreachable,
+    Unknown,
+}
+
 impl<'a> Packet<'a> {
     pub fn from_bytes<'b>(bytes: &'b [u8]) -> ParsingResult<Packet<'a>>
         where 'b: 'a
@@ -48,8 +57,15 @@ impl<'a> Packet<'a> {
         crc == u16::from_be(self.header.crc)
     }
 
-    pub fn is_echo_request(&self) -> bool {
-        self.header.icmp_type == ECHO_REQUEST_TYPE && self.header.icmp_code == ECHO_REQUEST_CODE
+    pub fn get_kind(&self) -> PacketKind {
+        match (self.header.icmp_type, self.header.icmp_code) {
+            (ECHO_REQUEST_TYPE, ECHO_REQUEST_CODE) => PacketKind::EchoRequest,
+            (ECHO_RESPONSE_TYPE, ECHO_RESPONSE_CODE) => PacketKind::EchoResponse,
+            (UNREACHABLE_TYPE, UNREACHABLE_HOST_CODE) => PacketKind::HostUnreachable,
+            (UNREACHABLE_TYPE, UNREACHABLE_PROTO_CODE) => PacketKind::ProtoUnreachable,
+            (UNREACHABLE_TYPE, UNREACHABLE_PORT_CODE) => PacketKind::PortUnreachable,
+            _ => PacketKind::Unknown,
+        }
     }
 
     pub fn get_payload(&self) -> &[u8] {
@@ -76,9 +92,17 @@ impl<'a> MutPacket<'a> {
         }
     }
 
-    pub fn set_echo_response(&mut self) {
-        self.header.icmp_type = ECHO_RESPONSE_TYPE;
-        self.header.icmp_code = ECHO_RESPONSE_CODE;
+    pub fn set_kind(&mut self, packet_type: PacketKind) {
+        let (new_type, new_code) = match packet_type {
+            EchoRequest => (ECHO_REQUEST_TYPE, ECHO_REQUEST_CODE),
+            EchoResponse => (ECHO_RESPONSE_TYPE, ECHO_RESPONSE_CODE),
+            HostUnreachable => (UNREACHABLE_TYPE, UNREACHABLE_HOST_CODE),
+            PortUnreachable => (UNREACHABLE_TYPE, UNREACHABLE_PORT_CODE),
+            ProtoUnreachable => (UNREACHABLE_TYPE, UNREACHABLE_PROTO_CODE),
+            Unknown => (self.header.icmp_type, self.header.icmp_code),
+        };
+        self.header.icmp_type = new_type;
+        self.header.icmp_code = new_code;
     }
 
     pub fn compute_checksum(&mut self) {
@@ -98,3 +122,7 @@ const ECHO_REQUEST_TYPE: u8 = 8;
 const ECHO_REQUEST_CODE: u8 = 0;
 const ECHO_RESPONSE_TYPE: u8 = 0;
 const ECHO_RESPONSE_CODE: u8 = 0;
+const UNREACHABLE_TYPE: u8 = 3;
+const UNREACHABLE_HOST_CODE: u8 = 1;
+const UNREACHABLE_PROTO_CODE: u8 = 2;
+const UNREACHABLE_PORT_CODE: u8 = 3;
