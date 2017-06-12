@@ -40,11 +40,29 @@ fn run() -> Result<()> {
     let icmpd_ = icmpd.clone();
 
     event_queue
-        .add(icmp_fd, move |_fd| icmpd_.borrow_mut().on_icmp_packet())
+        .add(icmp_fd, move |_fd| {
+            if let Err(err) = icmpd_.borrow_mut().on_icmp_packet() {
+                if err.is_unrecoverable() {
+                    return Err(err);
+                } else {
+                    println!("icmpd: network error: {}", err);
+                }
+            }
+            Ok(None)
+        })
         .map_err(|e| Error::from_io_error(e, "failed to listen to events on ip:1"))?;
 
     event_queue
-        .add(scheme_fd, move |_fd| icmpd.borrow_mut().on_scheme_event())
+        .add(scheme_fd, move |_fd| {
+            if let Err(err) = icmpd.borrow_mut().on_scheme_event() {
+                if err.is_unrecoverable() {
+                    return Err(err);
+                } else {
+                    println!("icmpd: scheme error: {}", err);
+                }
+            }
+            Ok(None)
+        })
         .map_err(|e| Error::from_io_error(e, "failed to listen to events on icmp"))?;
 
     event_queue.run()

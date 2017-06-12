@@ -1,7 +1,7 @@
-use error::{Result, Error, ParsingError};
+use error::{Result, Error, PacketError};
 use netutils::{Ipv4, Ipv4Header, Checksum, n16};
 use netutils;
-use packet::{Header, Packet, MutPacket, PacketKind};
+use packet::{Header, Packet, MutPacket, PacketKind, SubHeader, EchoHeader};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -24,6 +24,7 @@ struct Handle {
     flags: usize,
     ip_addr: Ipv4Addr,
     payload_queue: VecDeque<Vec<u8>>,
+    seq: u16,
 }
 
 impl Handle {
@@ -34,6 +35,7 @@ impl Handle {
             ip_addr,
             payload_queue: VecDeque::new(),
             flags,
+            seq: 0,
         }
     }
 }
@@ -79,7 +81,7 @@ impl Icmpd {
                 break;
             }
             let ip_packet = Ipv4::from_bytes(&packet_buffer[..bytes_readed])
-                .ok_or(Error::from_parsing_error(ParsingError::NotEnoughData,
+                .ok_or(Error::from_parsing_error(PacketError::NotEnoughData,
                                                  "failed to parse ip header"))?;
             let icmp_packet =
                 Packet::from_bytes(&ip_packet.data)
@@ -97,6 +99,7 @@ impl Icmpd {
     fn on_echo_request(&mut self, ip_packet: &Ipv4, icmp_packet: &Packet) -> Result<()> {
         let echo_response = produce_icmp_packet(Ipv4Addr::from(ip_packet.header.src.bytes),
                                                 PacketKind::EchoResponse,
+                                                &SubHeader::None,
                                                 icmp_packet.get_payload())?;
         self.icmp_file
             .write(&echo_response)
@@ -109,13 +112,17 @@ impl Icmpd {
                .get_mut(&Ipv4Addr::from(ip_packet.header.src.bytes)) {
             for fd in fd_set.iter() {
                 if let Some(handle) = self.handles.get_mut(fd) {
-                    handle
-                        .payload_queue
-                        .push_back(Vec::from(icmp_packet.get_payload()));
-                    post_fevent(&mut self.scheme_file,
-                                *fd,
-                                syscall::EVENT_READ,
-                                icmp_packet.get_payload().len())?;
+                    if let &SubHeader::Echo(echo_subheader) = icmp_packet.get_subheader() {
+                        if echo_subheader.get_id() == *fd as u16 {
+                            handle
+                                .payload_queue
+                                .push_back(Vec::from(icmp_packet.get_payload()));
+                            post_fevent(&mut self.scheme_file,
+                                        *fd,
+                                        syscall::EVENT_READ,
+                                        icmp_packet.get_payload().len())?;
+                        }
+                    }
                 }
             }
         }
@@ -207,8 +214,12 @@ impl SchemeMut for Icmpd {
         match handle.handle_type {
             HandleType::Echo => {
                 let echo_request =
-                    produce_icmp_packet(handle.ip_addr, PacketKind::EchoRequest, buf)
-                        .map_err(|_| syscall::Error::new(syscall::EPROTO))?;
+                    produce_icmp_packet(handle.ip_addr,
+                                        PacketKind::EchoRequest,
+                                        &SubHeader::Echo(&EchoHeader::new(fd as u16, handle.seq)),
+                                        buf)
+                            .map_err(|_| syscall::Error::new(syscall::EPROTO))?;
+                handle.seq += 1;
                 self.icmp_file
                     .write(&echo_request)
                     .map_err(|_| syscall::Error::new(syscall::EPROTO))
@@ -234,17 +245,24 @@ impl SchemeMut for Icmpd {
     }
 }
 
-fn produce_icmp_packet(to_ip: Ipv4Addr, kind: PacketKind, payload: &[u8]) -> Result<Vec<u8>> {
-    let mut ip_data = vec![0; mem::size_of::<Header>() + payload.len()];
+fn produce_icmp_packet(to_ip: Ipv4Addr,
+                       kind: PacketKind,
+                       subheader: &SubHeader,
+                       payload: &[u8])
+                       -> Result<Vec<u8>> {
+    let mut ip_data = vec![0; MutPacket::get_total_header_size(subheader) + payload.len()];
     {
         let mut out_icmp_packet =
             MutPacket::from_bytes(&mut ip_data)
                 .map_err(|e| Error::from_parsing_error(e, "can't parse empty icmp header"))?;
+        out_icmp_packet = out_icmp_packet
+            .set_subheader(subheader)
+            .map_err(|e| Error::from_parsing_error(e, "can't set subheader"))?;
         out_icmp_packet.set_kind(kind);
         {
             let out_payload = out_icmp_packet.get_payload();
             if out_payload.len() != payload.len() {
-                return Err(Error::from_parsing_error(ParsingError::NotEnoughData,
+                return Err(Error::from_parsing_error(PacketError::NotEnoughData,
                                                      " can't copy icmp payload to echo response"));
             }
             //WARNING: copy_from_slice can panic if the slices' lengths are different

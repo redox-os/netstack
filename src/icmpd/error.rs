@@ -4,15 +4,17 @@ use syscall::error::Error as SyscallError;
 use std::io::Error as IOError;
 use std::convert;
 
-pub enum ParsingError {
+pub enum PacketError {
     NotEnoughData,
     IncorrectChecksum,
+    NoEchoHeader,
+    SubheaderAlreadPresent,
 }
 
 enum ErrorType {
     Syscall(SyscallError),
     IOError(IOError),
-    ParsingError(ParsingError),
+    PacketError(PacketError),
 }
 
 pub struct Error {
@@ -21,9 +23,9 @@ pub struct Error {
 }
 
 impl Error {
-    pub fn from_parsing_error<S: Into<String>>(parsing_error: ParsingError, descr: S) -> Error {
+    pub fn from_parsing_error<S: Into<String>>(parsing_error: PacketError, descr: S) -> Error {
         Error {
-            error_type: ErrorType::ParsingError(parsing_error),
+            error_type: ErrorType::PacketError(parsing_error),
             descr: descr.into(),
         }
     }
@@ -40,13 +42,23 @@ impl Error {
             descr: descr.into(),
         }
     }
+
+    pub fn is_unrecoverable(&self) -> bool {
+        match self.error_type {
+            ErrorType::PacketError(_) => false,
+            ErrorType::IOError(_) |
+            ErrorType::Syscall(_) => true,
+        }
+    }
 }
 
-impl fmt::Display for ParsingError {
+impl fmt::Display for PacketError {
     fn fmt(&self, f: &mut fmt::Formatter) -> result::Result<(), fmt::Error> {
         write!(f, "{}", match *self {
-            ParsingError::NotEnoughData => "not enough data",
-            ParsingError::IncorrectChecksum => "checksum error",
+            PacketError::NotEnoughData => "not enough data",
+            PacketError::IncorrectChecksum => "checksum error",
+            PacketError::NoEchoHeader => "echo header is missing",
+            PacketError::SubheaderAlreadPresent => "subheader is already present",
         })
     }
 }
@@ -60,7 +72,7 @@ impl fmt::Display for Error {
             ErrorType::IOError(ref io_error) => {
                 write!(f, "{} : io error : {}", self.descr, io_error)
             }
-            ErrorType::ParsingError(ref parsign_error) => {
+            ErrorType::PacketError(ref parsign_error) => {
                 write!(f,
                        "{} : packet parsing error : {}",
                        self.descr,
@@ -77,4 +89,4 @@ impl convert::From<IOError> for Error {
 }
 
 pub type Result<T> = result::Result<T, Error>;
-pub type ParsingResult<T> = result::Result<T, ParsingError>;
+pub type PacketResult<T> = result::Result<T, PacketError>;
