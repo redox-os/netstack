@@ -1,8 +1,8 @@
-use std::result;
-use std::fmt;
-use syscall::error::Error as SyscallError;
-use std::io::Error as IOError;
 use std::convert;
+use std::fmt;
+use std::io::Error as IOError;
+use std::result;
+use syscall::error::Error as SyscallError;
 
 pub enum PacketError {
     NotEnoughData,

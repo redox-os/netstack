@@ -13,7 +13,7 @@ pub struct Header {
 #[repr(packed)]
 pub struct EchoHeader {
     id: u16,
-    seq: u16,
+    //Seq is set by the caller
 }
 
 pub enum SubHeader<'a> {
@@ -43,19 +43,14 @@ pub enum PacketKind {
 }
 
 impl EchoHeader {
-    pub fn new(id: u16, seq: u16) -> EchoHeader {
+    pub fn new(id: u16) -> EchoHeader {
         EchoHeader {
             id: id.to_be(),
-            seq: seq.to_be(),
         }
     }
 
     pub fn get_id(&self) -> u16 {
         u16::from_be(self.id)
-    }
-
-    pub fn get_seq(&self) -> u16 {
-        u16::from_be(self.seq)
     }
 }
 
@@ -193,7 +188,7 @@ impl<'a> MutPacket<'a> {
     pub fn compute_checksum(&mut self) {
         self.header.crc = 0;
         let header_ptr = self.header as *mut Header as usize;
-        let total_size = mem::size_of::<Header>() + self.payload.len();
+        let total_size = Self::get_total_header_size(&self.subheader) + self.payload.len();
         let crc = Checksum::compile(unsafe { Checksum::sum(header_ptr, total_size) });
         self.header.crc = crc
     }

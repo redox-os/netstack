@@ -1,7 +1,7 @@
 use error::{Result, Error, PacketError};
 use netutils::{Ipv4, Ipv4Header, Checksum, n16};
 use netutils;
-use packet::{Header, Packet, MutPacket, PacketKind, SubHeader, EchoHeader};
+use packet::{Packet, MutPacket, PacketKind, SubHeader, EchoHeader};
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -24,7 +24,6 @@ struct Handle {
     flags: usize,
     ip_addr: Ipv4Addr,
     payload_queue: VecDeque<Vec<u8>>,
-    seq: u16,
 }
 
 impl Handle {
@@ -35,7 +34,6 @@ impl Handle {
             ip_addr,
             payload_queue: VecDeque::new(),
             flags,
-            seq: 0,
         }
     }
 }
@@ -66,6 +64,7 @@ impl Icmpd {
                 break;
             }
             self.handle(&mut packet);
+            self.scheme_file.write(&packet)?;
         }
         Ok(None)
     }
@@ -108,19 +107,22 @@ impl Icmpd {
     }
 
     fn on_echo_response(&mut self, ip_packet: &Ipv4, icmp_packet: &Packet) -> Result<()> {
-        if let Some(fd_set) = self.echo_ips
-               .get_mut(&Ipv4Addr::from(ip_packet.header.src.bytes)) {
-            for fd in fd_set.iter() {
-                if let Some(handle) = self.handles.get_mut(fd) {
-                    if let &SubHeader::Echo(echo_subheader) = icmp_packet.get_subheader() {
+        if let &SubHeader::Echo(echo_subheader) = icmp_packet.get_subheader() {
+            if let Some(fd_set) = self.echo_ips
+                   .get_mut(&Ipv4Addr::from(ip_packet.header.src.bytes)) {
+                for fd in fd_set.iter() {
+                    if let Some(handle) = self.handles.get_mut(fd) {
                         if echo_subheader.get_id() == *fd as u16 {
                             handle
                                 .payload_queue
                                 .push_back(Vec::from(icmp_packet.get_payload()));
-                            post_fevent(&mut self.scheme_file,
-                                        *fd,
-                                        syscall::EVENT_READ,
-                                        icmp_packet.get_payload().len())?;
+
+                            if handle.events & syscall::EVENT_READ == syscall::EVENT_READ {
+                                post_fevent(&mut self.scheme_file,
+                                            *fd,
+                                            syscall::EVENT_READ,
+                                            icmp_packet.get_payload().len())?;
+                            }
                         }
                     }
                 }
@@ -160,10 +162,6 @@ impl SchemeMut for Icmpd {
     fn open(&mut self, url: &[u8], flags: usize, _uid: u32, _gid: u32) -> syscall::Result<usize> {
         use std::str;
         use std::str::FromStr;
-
-        // if uid != 0 {
-        //     return Err(syscall::Error::new(syscall::EACCES));
-        // }
 
         let path = str::from_utf8(url)
             .or(Err(syscall::Error::new(syscall::EINVAL)))?;
@@ -216,10 +214,9 @@ impl SchemeMut for Icmpd {
                 let echo_request =
                     produce_icmp_packet(handle.ip_addr,
                                         PacketKind::EchoRequest,
-                                        &SubHeader::Echo(&EchoHeader::new(fd as u16, handle.seq)),
+                                        &SubHeader::Echo(&EchoHeader::new(fd as u16)),
                                         buf)
                             .map_err(|_| syscall::Error::new(syscall::EPROTO))?;
-                handle.seq += 1;
                 self.icmp_file
                     .write(&echo_request)
                     .map_err(|_| syscall::Error::new(syscall::EPROTO))
