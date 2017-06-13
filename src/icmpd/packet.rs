@@ -2,6 +2,15 @@ use error::{PacketResult, PacketError};
 use netutils::Checksum;
 use std::mem;
 
+const ECHO_REQUEST_TYPE: u8 = 8;
+const ECHO_REQUEST_CODE: u8 = 0;
+const ECHO_RESPONSE_TYPE: u8 = 0;
+const ECHO_RESPONSE_CODE: u8 = 0;
+const UNREACHABLE_TYPE: u8 = 3;
+const UNREACHABLE_HOST_CODE: u8 = 1;
+const UNREACHABLE_PROTO_CODE: u8 = 2;
+const UNREACHABLE_PORT_CODE: u8 = 3;
+
 #[repr(packed)]
 pub struct Header {
     icmp_type: u8,
@@ -44,9 +53,7 @@ pub enum PacketKind {
 
 impl EchoHeader {
     pub fn new(id: u16) -> EchoHeader {
-        EchoHeader {
-            id: id.to_be(),
-        }
+        EchoHeader { id: id.to_be() }
     }
 
     pub fn get_id(&self) -> u16 {
@@ -72,7 +79,7 @@ impl<'a> Packet<'a> {
         } else {
             let (header_bytes, payload_bytes) = bytes.split_at(mem::size_of::<Header>());
             let mut packet = Packet {
-                header: unsafe { mem::transmute(header_bytes.as_ptr()) },
+                header: unsafe { &*(header_bytes.as_ptr() as *const Header) },
                 payload: payload_bytes,
                 subheader: SubHeader::None,
             };
@@ -86,8 +93,10 @@ impl<'a> Packet<'a> {
                     }
                     let (echo_header_payload, payload) =
                         packet.payload.split_at(mem::size_of::<EchoHeader>());
-                    packet.subheader =
-                        SubHeader::Echo(unsafe { mem::transmute(echo_header_payload.as_ptr()) });
+                    packet.subheader = SubHeader::Echo(unsafe {
+                                                           &*(echo_header_payload.as_ptr() as
+                                                              *const EchoHeader)
+                                                       });
                     packet.payload = payload;
                     Ok(packet)
                 }
@@ -138,7 +147,7 @@ impl<'a> MutPacket<'a> {
         } else {
             let (header_bytes, payload_bytes) = bytes.split_at_mut(mem::size_of::<Header>());
             Ok(MutPacket {
-                   header: unsafe { mem::transmute(header_bytes.as_ptr()) },
+                   header: unsafe { &mut *(header_bytes.as_ptr() as *mut Header) },
                    payload: payload_bytes,
                    subheader: SubHeader::None,
                })
@@ -159,8 +168,8 @@ impl<'a> MutPacket<'a> {
         let new_subheader = match *subheader {
             SubHeader::Echo(echo_sub_header) => {
                 let echo_sub_header_mut: &mut EchoHeader =
-                    unsafe { mem::transmute(subheader_bytes.as_ptr()) };
-                *echo_sub_header_mut = echo_sub_header.clone();
+                    unsafe { &mut *(subheader_bytes.as_ptr() as *mut EchoHeader) };
+                *echo_sub_header_mut = *echo_sub_header;
                 SubHeader::Echo(echo_sub_header_mut)
             }
             SubHeader::None => SubHeader::None,
@@ -201,12 +210,3 @@ impl<'a> MutPacket<'a> {
         mem::size_of::<Header>() + subheader.get_size()
     }
 }
-
-const ECHO_REQUEST_TYPE: u8 = 8;
-const ECHO_REQUEST_CODE: u8 = 0;
-const ECHO_RESPONSE_TYPE: u8 = 0;
-const ECHO_RESPONSE_CODE: u8 = 0;
-const UNREACHABLE_TYPE: u8 = 3;
-const UNREACHABLE_HOST_CODE: u8 = 1;
-const UNREACHABLE_PROTO_CODE: u8 = 2;
-const UNREACHABLE_PORT_CODE: u8 = 3;

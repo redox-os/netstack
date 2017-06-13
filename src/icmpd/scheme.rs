@@ -64,7 +64,7 @@ impl Icmpd {
                 break;
             }
             self.handle(&mut packet);
-            self.scheme_file.write(&packet)?;
+            self.scheme_file.write_all(&packet)?;
         }
         Ok(None)
     }
@@ -80,8 +80,10 @@ impl Icmpd {
                 break;
             }
             let ip_packet = Ipv4::from_bytes(&packet_buffer[..bytes_readed])
-                .ok_or(Error::from_parsing_error(PacketError::NotEnoughData,
-                                                 "failed to parse ip header"))?;
+                .ok_or_else(|| {
+                                Error::from_parsing_error(PacketError::NotEnoughData,
+                                                          "failed to parse ip header")
+                            })?;
             let icmp_packet =
                 Packet::from_bytes(&ip_packet.data)
                     .map_err(|e| Error::from_parsing_error(e, "failed to parse ICMP packet"))?;
@@ -107,7 +109,7 @@ impl Icmpd {
     }
 
     fn on_echo_response(&mut self, ip_packet: &Ipv4, icmp_packet: &Packet) -> Result<()> {
-        if let &SubHeader::Echo(echo_subheader) = icmp_packet.get_subheader() {
+        if let SubHeader::Echo(echo_subheader) = *icmp_packet.get_subheader() {
             if let Some(fd_set) = self.echo_ips
                    .get_mut(&Ipv4Addr::from(ip_packet.header.src.bytes)) {
                 for fd in fd_set.iter() {
@@ -138,7 +140,7 @@ impl Icmpd {
         self.handles.insert(fd, handle);
         self.echo_ips
             .entry(ip_addr)
-            .or_insert_with(|| HashSet::new())
+            .or_insert_with(HashSet::new)
             .insert(fd);
         Ok(fd)
     }
@@ -164,13 +166,17 @@ impl SchemeMut for Icmpd {
         use std::str::FromStr;
 
         let path = str::from_utf8(url)
-            .or(Err(syscall::Error::new(syscall::EINVAL)))?;
-        let mut parts = path.split("/");
-        let method = parts.next().ok_or(syscall::Error::new(syscall::EINVAL))?;
+            .or_else(|_| Err(syscall::Error::new(syscall::EINVAL)))?;
+        let mut parts = path.split('/');
+        let method = parts
+            .next()
+            .ok_or_else(|| syscall::Error::new(syscall::EINVAL))?;
         match method {
             "echo" => {
-                let addr = parts.next().ok_or(syscall::Error::new(syscall::EINVAL))?;
-                let addr = Ipv4Addr::from_str(&addr)
+                let addr = parts
+                    .next()
+                    .ok_or_else(|| syscall::Error::new(syscall::EINVAL))?;
+                let addr = Ipv4Addr::from_str(addr)
                     .map_err(|_| syscall::Error::new(syscall::EINVAL))?;
                 self.open_echo(addr, flags)
             }
@@ -182,7 +188,7 @@ impl SchemeMut for Icmpd {
         let (ip, ip_set) = {
             let handle = self.handles
                 .get_mut(&fd)
-                .ok_or(syscall::Error::new(syscall::EBADF))?;
+                .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
             match handle.handle_type {
                 HandleType::Echo => (handle.ip_addr, &mut self.echo_ips),
             }
@@ -208,15 +214,15 @@ impl SchemeMut for Icmpd {
         }
         let handle = self.handles
             .get_mut(&fd)
-            .ok_or(syscall::Error::new(syscall::EBADF))?;
+            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
         match handle.handle_type {
             HandleType::Echo => {
-                let echo_request =
-                    produce_icmp_packet(handle.ip_addr,
-                                        PacketKind::EchoRequest,
-                                        &SubHeader::Echo(&EchoHeader::new(fd as u16)),
-                                        buf)
-                            .map_err(|_| syscall::Error::new(syscall::EPROTO))?;
+                let echo_request = produce_icmp_packet(handle.ip_addr,
+                                                       PacketKind::EchoRequest,
+                                                       &SubHeader::Echo(&EchoHeader::new(fd as
+                                                                                         u16)),
+                                                       buf)
+                        .map_err(|_| syscall::Error::new(syscall::EPROTO))?;
                 self.icmp_file
                     .write(&echo_request)
                     .map_err(|_| syscall::Error::new(syscall::EPROTO))
@@ -227,7 +233,7 @@ impl SchemeMut for Icmpd {
     fn read(&mut self, fd: usize, buf: &mut [u8]) -> syscall::Result<usize> {
         let handle = self.handles
             .get_mut(&fd)
-            .ok_or(syscall::Error::new(syscall::EBADF))?;
+            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
         match handle.handle_type {
             HandleType::Echo => Icmpd::read_echo(handle, buf),
         }
@@ -236,7 +242,7 @@ impl SchemeMut for Icmpd {
     fn fevent(&mut self, fd: usize, events: usize) -> syscall::Result<usize> {
         let handle = self.handles
             .get_mut(&fd)
-            .ok_or(syscall::Error::new(syscall::EBADF))?;
+            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
         handle.events = events;
         Ok(fd)
     }
