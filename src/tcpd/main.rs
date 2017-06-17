@@ -798,7 +798,7 @@ impl SchemeMut for Tcpd {
 
     fn fpath(&mut self, file: usize, buf: &mut [u8]) -> Result<usize> {
         if let Handle::Tcp(ref mut handle) = *self.handles.get_mut(&file).ok_or(Error::new(EBADF))? {
-            let path_string = format!("udp:{}:{}/{}:{}", handle.remote.0.to_string(), handle.remote.1, handle.local.0.to_string(), handle.local.1);
+            let path_string = format!("tcp:{}:{}/{}:{}", handle.remote.0.to_string(), handle.remote.1, handle.local.0.to_string(), handle.local.1);
             let path = path_string.as_bytes();
 
             let mut i = 0;
