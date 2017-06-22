@@ -316,13 +316,15 @@ impl Tcpd {
                                 while ! handle.todo_read.is_empty() && (! handle.data.is_empty() || handle.read_closed()) {
                                     let (_timeout, mut packet) = handle.todo_read.pop_front().unwrap();
                                     let buf = unsafe { slice::from_raw_parts_mut(packet.c as *mut u8, packet.d) };
-                                    if let Some((_ip, tcp)) = handle.data.pop_front() {
-                                        let mut i = 0;
-                                        while i < buf.len() && i < tcp.data.len() {
-                                            buf[i] = tcp.data[i];
-                                            i += 1;
+                                    if let Some((ip, mut tcp)) = handle.data.pop_front() {
+                                        let len = std::cmp::min(buf.len(), tcp.data.len());
+                                        for (i, c) in tcp.data.drain(0..len).enumerate() {
+                                            buf[i] = c;
                                         }
-                                        packet.a = i;
+                                        if !tcp.data.is_empty() {
+                                            handle.data.push_front((ip, tcp));
+                                        }
+                                        packet.a = len;
                                     } else {
                                         packet.a = 0;
                                     }
