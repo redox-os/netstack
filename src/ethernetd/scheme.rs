@@ -63,7 +63,8 @@ impl EthernetScheme {
 impl SchemeMut for EthernetScheme {
     fn open(&mut self, url: &[u8], flags: usize, uid: u32, _gid: u32) -> Result<usize> {
         if uid == 0 {
-            let mac_addr = MacAddr::from_str(&getcfg("mac").map_err(|err| Error::new(err.raw_os_error().unwrap_or(EIO)))?);
+            let mac_str = getcfg("mac").map_err(|err| Error::new(err.raw_os_error().unwrap_or(EIO)))?;
+            let mac_addr = MacAddr::from_str(mac_str.trim());
             let path = try!(str::from_utf8(url).or(Err(Error::new(EINVAL))));
 
             let ethertype = u16::from_str_radix(path, 16).unwrap_or(0);

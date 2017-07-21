@@ -20,10 +20,10 @@ pub struct EthernetInterface {
 impl EthernetInterface {
     pub fn new(arp_fd: usize, ip_fd: usize) -> Self {
         EthernetInterface {
-            mac: MacAddr::from_str(&getcfg("mac").unwrap()),
-            ip: Ipv4Addr::from_str(&getcfg("ip").unwrap()),
-            router: Ipv4Addr::from_str(&getcfg("ip_router").unwrap()),
-            subnet: Ipv4Addr::from_str(&getcfg("ip_subnet").unwrap()),
+            mac: MacAddr::from_str(&getcfg("mac").unwrap().trim()),
+            ip: Ipv4Addr::from_str(&getcfg("ip").unwrap().trim()),
+            router: Ipv4Addr::from_str(&getcfg("ip_router").unwrap().trim()),
+            subnet: Ipv4Addr::from_str(&getcfg("ip_subnet").unwrap().trim()),
             arp_file: unsafe { File::from_raw_fd(arp_fd) },
             ip_file: unsafe { File::from_raw_fd(ip_fd) },
             arp: BTreeMap::new(),
