@@ -150,7 +150,11 @@ impl SchemeMut for Ipd {
         }
     }
 
-    fn dup(&mut self, file: usize, _buf: &[u8]) -> Result<usize> {
+    fn dup(&mut self, file: usize, buf: &[u8]) -> Result<usize> {
+        if ! buf.is_empty() {
+            return Err(Error::new(EINVAL));
+        }
+
         let handle = {
             let handle = self.handles.get(&file).ok_or(Error::new(EBADF))?;
             Handle {
