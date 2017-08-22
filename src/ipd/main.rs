@@ -316,11 +316,13 @@ fn daemon(arp_fd: usize, ip_fd: usize, scheme_fd: usize) {
 }
 
 fn main() {
+    println!("ipd: opening ethernet:806");
     match syscall::open("ethernet:806", syscall::O_RDWR | syscall::O_NONBLOCK) {
         Ok(arp_fd) => match syscall::open("ethernet:800", syscall::O_RDWR | syscall::O_NONBLOCK) {
             Ok(ip_fd) => {
                 // Daemonize
                 if unsafe { syscall::clone(0).unwrap() } == 0 {
+                    println!("ipd: providing ip:");
                     match syscall::open(":ip", syscall::O_RDWR | syscall::O_CREAT | syscall::O_NONBLOCK) {
                         Ok(scheme_fd) => {
                             daemon(arp_fd, ip_fd, scheme_fd);

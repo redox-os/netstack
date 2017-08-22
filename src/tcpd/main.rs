@@ -910,10 +910,12 @@ fn main() {
     let time_path = format!("time:{}", CLOCK_MONOTONIC);
     match syscall::open(&time_path, O_RDWR) {
         Ok(time_fd) => {
+            println!("tcpd: opening ip:6");
             match syscall::open("ip:6", O_RDWR | O_NONBLOCK) {
                 Ok(tcp_fd) => {
                     // Daemonize
                     if unsafe { syscall::clone(0).unwrap() } == 0 {
+                        println!("tcpd: providing tcp:");
                         match syscall::open(":tcp", O_RDWR | O_CREAT | O_NONBLOCK) {
                             Ok(scheme_fd) => {
                                 daemon(scheme_fd, tcp_fd, time_fd);

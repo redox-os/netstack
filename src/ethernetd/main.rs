@@ -87,10 +87,12 @@ fn daemon(network_fd: usize, socket_fd: usize) {
 }
 
 fn main() {
+    println!("ethernetd: opening network:");
     match syscall::open("network:", syscall::O_RDWR | syscall::O_NONBLOCK) {
         Ok(network_fd) => {
             // Daemonize
             if unsafe { syscall::clone(0).unwrap() } == 0 {
+                println!("ethernetd: providing ethernet:");
                 match syscall::open(":ethernet", syscall::O_RDWR | syscall::O_CREAT | syscall::O_NONBLOCK) {
                     Ok(socket_fd) => {
                         daemon(network_fd, socket_fd);

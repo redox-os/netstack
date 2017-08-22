@@ -22,10 +22,12 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    println!("icmpd: opening ip:1:");
     let icmp_fd = syscall::open("ip:1", O_RDWR | O_NONBLOCK)
         .map_err(|e| Error::from_syscall_error(e, "failed to open ip:1"))? as
                   RawFd;
 
+    println!("icmpd: prividing icmp:");
     let scheme_fd = syscall::open(":icmp", O_RDWR | O_CREAT | O_NONBLOCK)
         .map_err(|e| Error::from_syscall_error(e, "failed to open :icmp"))? as
                     RawFd;
