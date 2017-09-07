@@ -2,7 +2,7 @@ use netutils::{getcfg, n16, Ipv4Addr, MacAddr, Ipv4, EthernetII, EthernetIIHeade
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Result, Read, Write};
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{RawFd, FromRawFd};
 
 use interface::Interface;
 
@@ -18,7 +18,7 @@ pub struct EthernetInterface {
 }
 
 impl EthernetInterface {
-    pub fn new(arp_fd: usize, ip_fd: usize) -> Self {
+    pub fn new(arp_fd: RawFd, ip_fd: RawFd) -> Self {
         EthernetInterface {
             mac: MacAddr::from_str(&getcfg("mac").unwrap().trim()),
             ip: Ipv4Addr::from_str(&getcfg("ip").unwrap().trim()),

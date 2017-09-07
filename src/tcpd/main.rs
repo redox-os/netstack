@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::{mem, process, slice, str};
 use std::ops::{Deref, DerefMut};
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{RawFd, FromRawFd};
 use std::rc::Rc;
 
 use event::EventQueue;
@@ -916,7 +916,7 @@ impl SchemeMut for Tcpd {
     }
 }
 
-fn daemon(scheme_fd: usize, tcp_fd: usize, time_fd: usize) {
+fn daemon(scheme_fd: RawFd, tcp_fd: RawFd, time_fd: RawFd) {
     let scheme_file = unsafe { File::from_raw_fd(scheme_fd) };
     let tcp_file = unsafe { File::from_raw_fd(tcp_fd) };
     let time_file = unsafe { File::from_raw_fd(time_fd) };
@@ -959,7 +959,7 @@ fn main() {
                         println!("tcpd: providing tcp:");
                         match syscall::open(":tcp", O_RDWR | O_CREAT | O_NONBLOCK) {
                             Ok(scheme_fd) => {
-                                daemon(scheme_fd, tcp_fd, time_fd);
+                                daemon(scheme_fd as RawFd, tcp_fd as RawFd, time_fd as RawFd);
                             },
                             Err(err) => {
                                 println!("tcpd: failed to create tcp scheme: {}", err);

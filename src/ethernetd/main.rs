@@ -6,7 +6,7 @@ use event::EventQueue;
 use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Result, Read, Write};
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{RawFd, FromRawFd};
 use std::process;
 use std::rc::Rc;
 
@@ -16,7 +16,7 @@ use scheme::EthernetScheme;
 
 mod scheme;
 
-fn daemon(network_fd: usize, socket_fd: usize) {
+fn daemon(network_fd: RawFd, socket_fd: RawFd) {
     let network = unsafe { File::from_raw_fd(network_fd) };
     let socket = Rc::new(RefCell::new(unsafe { File::from_raw_fd(socket_fd) }));
     let scheme = Rc::new(RefCell::new(EthernetScheme::new(network)));
@@ -95,7 +95,7 @@ fn main() {
                 println!("ethernetd: providing ethernet:");
                 match syscall::open(":ethernet", syscall::O_RDWR | syscall::O_CREAT | syscall::O_NONBLOCK) {
                     Ok(socket_fd) => {
-                        daemon(network_fd, socket_fd);
+                        daemon(network_fd as RawFd, socket_fd as RawFd);
                     },
                     Err(err) => {
                         println!("ethernetd: failed to create ethernet scheme: {}", err);

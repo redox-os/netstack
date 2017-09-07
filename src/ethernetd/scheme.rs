@@ -156,7 +156,7 @@ impl SchemeMut for EthernetScheme {
     fn fsync(&mut self, id: usize) -> Result<usize> {
         let _handle = self.handles.get(&id).ok_or(Error::new(EBADF))?;
 
-        syscall::fsync(self.network.as_raw_fd())
+        syscall::fsync(self.network.as_raw_fd() as usize)
     }
 
     fn close(&mut self, id: usize) -> Result<usize> {

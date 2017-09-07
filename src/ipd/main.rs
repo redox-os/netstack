@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{RawFd, FromRawFd};
 use std::{process, slice, str};
 use std::rc::Rc;
 use syscall::data::Packet;
@@ -260,7 +260,7 @@ impl SchemeMut for Ipd {
     }
 }
 
-fn daemon(arp_fd: usize, ip_fd: usize, scheme_fd: usize) {
+fn daemon(arp_fd: RawFd, ip_fd: RawFd, scheme_fd: RawFd) {
     let scheme_file = unsafe { File::from_raw_fd(scheme_fd) };
 
     let ipd = Rc::new(RefCell::new(Ipd::new(scheme_file)));
@@ -326,7 +326,7 @@ fn main() {
                     println!("ipd: providing ip:");
                     match syscall::open(":ip", syscall::O_RDWR | syscall::O_CREAT | syscall::O_NONBLOCK) {
                         Ok(scheme_fd) => {
-                            daemon(arp_fd, ip_fd, scheme_fd);
+                            daemon(arp_fd as RawFd, ip_fd as RawFd, scheme_fd as RawFd);
                         },
                         Err(err) => {
                             println!("ipd: failed to create ip scheme: {}", err);
