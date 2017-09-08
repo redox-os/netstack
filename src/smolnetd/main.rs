@@ -1,5 +1,6 @@
 extern crate event;
 extern crate syscall;
+extern crate smoltcp;
 
 use error::{Error, Result};
 use event::EventQueue;

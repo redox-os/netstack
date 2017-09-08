@@ -31,3 +31,8 @@ netutils = { git = "https://github.com/redox-os/netutils.git" }
 rand = "0.3"
 redox_event = { git = "https://github.com/redox-os/event.git" }
 redox_syscall = "0.1"
+
+[dependencies.smoltcp]
+git = "https://github.com/m-labs/smoltcp.git"
+default-features = false
+features = ["std"] 
