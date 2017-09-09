@@ -18,9 +18,9 @@ mod scheme;
 fn run() -> Result<()> {
     use syscall::flag::*;
 
-    if unsafe { syscall::clone(0).unwrap() } != 0 {
-        return Ok(());
-    }
+    // if unsafe { syscall::clone(0).unwrap() } != 0 {
+    //     return Ok(());
+    // }
 
     println!("icmpd: opening ip:1:");
     let icmp_fd = syscall::open("ip:1", O_RDWR | O_NONBLOCK)
@@ -31,7 +31,6 @@ fn run() -> Result<()> {
     let scheme_fd = syscall::open(":icmp", O_RDWR | O_CREAT | O_NONBLOCK)
         .map_err(|e| Error::from_syscall_error(e, "failed to open :icmp"))? as
                     RawFd;
-
 
     let icmpd = Rc::new(RefCell::new(Icmpd::new(unsafe { File::from_raw_fd(icmp_fd) },
                                                 unsafe { File::from_raw_fd(scheme_fd) })));

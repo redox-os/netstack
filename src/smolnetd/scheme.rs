@@ -1,97 +1,59 @@
-use error::Result;
-use std::rc::Rc;
-use std::fs::File;
-use std::cell::RefCell;
-use std::time::Instant;
-use std::io::{Read, Write};
-use syscall::SchemeMut;
-use syscall;
+use device::NetworkDevice;
+use error::{Error, Result};
+use netutils::{getcfg, MacAddr};
 use smoltcp;
+use std::collections::{BTreeMap, VecDeque};
+use std::fs::File;
+use std::io::{Read, Write};
+use std::mem;
+use std::net::Ipv4Addr;
+use std::str::FromStr;
+use std::time::Instant;
+use std::rc::Rc;
+use std::cell::RefCell;
+use smoltcp::socket::AsSocket;
+use syscall;
 
-struct NetworkDevice {
-    network_file: Rc<RefCell<File>>,
-}
-
-impl NetworkDevice {
-    const MTU: usize = 1520;
-
-    pub fn new(network_file: File) -> NetworkDevice {
-        NetworkDevice {
-            network_file: Rc::new(RefCell::new(network_file)),
-        }
-    }
-}
-
-struct TxBuffer {
-    buffer: Vec<u8>,
-    network_file: Rc<RefCell<File>>,
-}
-
-impl AsRef<[u8]> for TxBuffer {
-    fn as_ref(&self) -> &[u8] {
-        self.buffer.as_ref()
-    }
-}
-
-impl AsMut<[u8]> for TxBuffer {
-    fn as_mut(&mut self) -> &mut [u8] {
-        self.buffer.as_mut()
-    }
-}
-
-impl Drop for TxBuffer {
-    fn drop(&mut self) {
-        let _ = self.network_file.borrow_mut().write(&self.buffer);
-    }
-}
-
-impl smoltcp::phy::Device for NetworkDevice {
-    type RxBuffer = Vec<u8>;
-    type TxBuffer = TxBuffer;
-
-    fn limits(&self) -> smoltcp::phy::DeviceLimits {
-        let mut limits = smoltcp::phy::DeviceLimits::default();
-        limits.max_transmission_unit = Self::MTU;
-        limits.max_burst_size = Some(1);
-        limits
-    }
-
-    fn receive(&mut self, _timestamp: u64) -> smoltcp::Result<Self::RxBuffer> {
-        let mut buffer = Vec::with_capacity(65536);
-        if let Ok(count) = self.network_file.borrow_mut().read(&mut buffer) {
-            if count == 0 {
-                return Err(smoltcp::Error::Exhausted);
-            }
-            buffer.resize(count, 0);
-            Ok(buffer)
-        } else {
-            Err(smoltcp::Error::Exhausted)
-        }
-    }
-
-    fn transmit(&mut self, _timestamp: u64, length: usize) -> smoltcp::Result<Self::TxBuffer> {
-        Ok(TxBuffer {
-            network_file: self.network_file.clone(),
-            buffer: vec![0; length],
-        })
-    }
+struct IpHandle {
+    flags: usize,
+    events: usize,
+    socket_handle: smoltcp::socket::SocketHandle,
 }
 
 pub struct Smolnetd {
     iface: smoltcp::iface::EthernetInterface<'static, 'static, 'static, NetworkDevice>,
-    sockets: smoltcp::socket::SocketSet<'static, 'static, 'static>,
+    socket_set: smoltcp::socket::SocketSet<'static, 'static, 'static>,
     ip_file: File,
+    time_file: File,
+    network_file: Rc<RefCell<File>>,
     startup_time: Instant,
+    ip_sockets: BTreeMap<usize, IpHandle>,
+    input_queue: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    next_fd: usize,
 }
 
-struct IpHandler<'a>(&'a mut Smolnetd);
+struct IpScheme<'a>(&'a mut Smolnetd);
 
 impl Smolnetd {
-    pub fn new(network_file: File, ip_file: File) -> Smolnetd {
+    const IP_BUFFER_SIZE: usize = 128;
+    const CHECK_TIMEOUT_MS: i64 = 1000;
+
+    pub fn new(network_file: File, ip_file: File, time_file: File) -> Smolnetd {
         let arp_cache = smoltcp::iface::SliceArpCache::new(vec![Default::default(); 8]);
-        let hardware_addr = smoltcp::wire::EthernetAddress([0x02, 0x00, 0x00, 0x00, 0x00, 0x01]);
-        let protocol_addrs = [smoltcp::wire::IpAddress::v4(192, 168, 69, 1)];
-        let network_device = NetworkDevice::new(network_file);
+        //TODO Use smoltcp::wire::EthernetAddress::from_str
+        let mac_addr = MacAddr::from_str(&getcfg("mac").unwrap().trim());
+        let hardware_addr = smoltcp::wire::EthernetAddress(mac_addr.bytes);
+        //TODO Use smoltcp::wire::Ipv4Addr::from_str
+        let ip_bytes = Ipv4Addr::from_str(&getcfg("ip").unwrap().trim())
+            .unwrap()
+            .octets();
+        let protocol_addrs = [
+            smoltcp::wire::IpAddress::Ipv4(smoltcp::wire::Ipv4Address::from_bytes(&ip_bytes)),
+        ];
+        trace!("mac {:?} ip {:?}", hardware_addr, protocol_addrs);
+        let input_queue = Rc::new(RefCell::new(VecDeque::new()));
+        let network_file = Rc::new(RefCell::new(network_file));
+        let network_device = NetworkDevice::new(network_file.clone(), input_queue.clone());
         Smolnetd {
             iface: smoltcp::iface::EthernetInterface::new(
                 Box::new(network_device),
@@ -99,28 +61,82 @@ impl Smolnetd {
                 hardware_addr,
                 protocol_addrs,
             ),
-            sockets: smoltcp::socket::SocketSet::new(vec![]),
+            socket_set: smoltcp::socket::SocketSet::new(vec![]),
             startup_time: Instant::now(),
             ip_file,
+            time_file,
+            ip_sockets: BTreeMap::new(),
+            next_fd: 0,
+            input_queue,
+            network_file,
         }
     }
 
     pub fn on_network_scheme_event(&mut self) -> Result<Option<()>> {
-        let timestamp = self.get_timestamp();
-        let _ = self.iface.poll(&mut self.sockets, timestamp);
+        if self.read_frames()? > 0 {
+            self.poll().map(Some)?;
+        }
         Ok(None)
     }
 
     pub fn on_ip_scheme_event(&mut self) -> Result<Option<()>> {
+        use syscall::SchemeMut;
+
         loop {
             let mut packet = syscall::Packet::default();
             if self.ip_file.read(&mut packet)? == 0 {
                 break;
             }
-            IpHandler(self).handle(&mut packet);
+            IpScheme(self).handle(&mut packet);
             self.ip_file.write_all(&packet)?;
         }
         Ok(None)
+    }
+
+    pub fn on_time_event(&mut self) -> Result<Option<()>> {
+        let mut time = syscall::data::TimeSpec::default();
+        if self.time_file.read(&mut time)? < mem::size_of::<syscall::data::TimeSpec>() {
+            panic!();
+        }
+        let mut time_ms = time.tv_sec * 1000i64 + (time.tv_nsec as i64) / 1_000_000i64;
+        time_ms += Smolnetd::CHECK_TIMEOUT_MS;
+        time.tv_sec = time_ms / 1000;
+        time.tv_nsec = ((time_ms % 1000) * 1_000_00) as i32;
+        self.time_file
+            .write_all(&time)
+            .map_err(|e| Error::from_io_error(e, "Failed to write to time file"))?;
+
+        self.poll().map(Some)?;
+        Ok(None)
+    }
+
+    fn poll(&mut self) -> Result<()> {
+        let timestamp = self.get_timestamp();
+        self.iface
+            .poll(&mut self.socket_set, timestamp)
+            .expect("poll error");
+        self.notify_ip_sockets()
+    }
+
+    fn read_frames(&mut self) -> Result<usize> {
+        let mut total_frames = 0;
+        loop {
+            let mut buffer = vec![0; 65536];
+            let count = self.network_file
+                .borrow_mut()
+                .read(&mut buffer)
+                .map_err(|e| {
+                    Error::from_io_error(e, "Failed to read from network file")
+                })?;
+            if count == 0 {
+                break;
+            }
+            trace!("got frame {}", count);
+            buffer.resize(count, 0);
+            self.input_queue.borrow_mut().push_back(buffer);
+            total_frames += 1;
+        }
+        Ok(total_frames)
     }
 
     fn get_timestamp(&self) -> u64 {
@@ -128,8 +144,150 @@ impl Smolnetd {
         let duration_ms = (duration.as_secs() * 1000) + (duration.subsec_nanos() / 1000000) as u64;
         duration_ms
     }
+
+    fn network_fsync(&mut self) -> syscall::Result<usize> {
+        use std::os::unix::io::AsRawFd;
+        syscall::fsync(self.network_file.borrow_mut().as_raw_fd() as usize)
+    }
+
+    fn notify_ip_sockets(&mut self) -> Result<()> {
+        for (&fd, ref handle) in &self.ip_sockets {
+            let socket: &mut smoltcp::socket::RawSocket =
+                self.socket_set.get_mut(handle.socket_handle).as_socket();
+            if socket.can_send() {
+                post_fevent(&mut self.ip_file, fd, syscall::EVENT_READ, 1)?;
+            }
+        }
+        Ok(())
+    }
 }
 
-impl<'a> SchemeMut for IpHandler<'a> {
-    
+impl<'a> syscall::SchemeMut for IpScheme<'a> {
+    fn open(&mut self, url: &[u8], flags: usize, uid: u32, _gid: u32) -> syscall::Result<usize> {
+        use std::str;
+
+        if uid != 0 {
+            return Err(syscall::Error::new(syscall::EACCES));
+        }
+        let path = str::from_utf8(url).or_else(|_| Err(syscall::Error::new(syscall::EINVAL)))?;
+        let proto = u8::from_str_radix(path, 16).or(Err(syscall::Error::new(syscall::ENOENT)))?;
+
+        let mut rx_packets = Vec::with_capacity(Smolnetd::IP_BUFFER_SIZE);
+        let mut tx_packets = Vec::with_capacity(Smolnetd::IP_BUFFER_SIZE);
+        for _ in 0..Smolnetd::IP_BUFFER_SIZE {
+            rx_packets.push(smoltcp::socket::RawPacketBuffer::new(
+                vec![0; NetworkDevice::MTU],
+            ));
+            tx_packets.push(smoltcp::socket::RawPacketBuffer::new(
+                vec![0; NetworkDevice::MTU],
+            ));
+        }
+        let rx_buffer = smoltcp::socket::RawSocketBuffer::new(rx_packets);
+        let tx_buffer = smoltcp::socket::RawSocketBuffer::new(tx_packets);
+        let raw_socket = smoltcp::socket::RawSocket::new(
+            smoltcp::wire::IpVersion::Ipv4,
+            smoltcp::wire::IpProtocol::from(proto),
+            rx_buffer,
+            tx_buffer,
+        );
+
+        let socket_handle = self.0.socket_set.add(raw_socket);
+        let id = self.0.next_fd;
+        trace!("Open {} -> {}", path, id);
+
+        self.0.ip_sockets.insert(
+            id,
+            IpHandle {
+                flags,
+                events: 0,
+                socket_handle,
+            },
+        );
+        self.0.next_fd += 1;
+        Ok(id)
+    }
+
+    fn close(&mut self, fd: usize) -> syscall::Result<usize> {
+        trace!("Close {}", fd);
+        let socket_handle = {
+            let handle = self.0
+                .ip_sockets
+                .get(&fd)
+                .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+            handle.socket_handle
+        };
+        self.0.ip_sockets.remove(&fd);
+        self.0.socket_set.remove(socket_handle);
+        Ok(0)
+    }
+
+    fn write(&mut self, fd: usize, buf: &[u8]) -> syscall::Result<usize> {
+        trace!("Write {} len {}", fd, buf.len());
+
+        let handle = self.0
+            .ip_sockets
+            .get(&fd)
+            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+        let socket: &mut smoltcp::socket::RawSocket =
+            self.0.socket_set.get_mut(handle.socket_handle).as_socket();
+        socket.send_slice(buf).expect("Can't send slice");
+        Ok(buf.len())
+    }
+
+    fn read(&mut self, fd: usize, buf: &mut [u8]) -> syscall::Result<usize> {
+        trace!("Read {}", fd);
+        use smoltcp::socket::AsSocket;
+
+        let handle = self.0
+            .ip_sockets
+            .get(&fd)
+            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+        let socket: &mut smoltcp::socket::RawSocket =
+            self.0.socket_set.get_mut(handle.socket_handle).as_socket();
+        if socket.can_recv() {
+            let length = socket.recv_slice(buf).expect("Can't receive slice");
+            Ok(length)
+        } else if handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
+            Ok(0)
+        } else {
+            Err(syscall::Error::new(syscall::EWOULDBLOCK))
+        }
+    }
+
+    fn fevent(&mut self, fd: usize, events: usize) -> syscall::Result<usize> {
+        trace!("fevent {}", fd);
+        let handle = self.0
+            .ip_sockets
+            .get_mut(&fd)
+            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+        handle.events = events;
+        Ok(fd)
+    }
+
+    fn fsync(&mut self, fd: usize) -> syscall::Result<usize> {
+        trace!("fsync {}", fd);
+        {
+            let _handle = self.0
+                .ip_sockets
+                .get_mut(&fd)
+                .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+        }
+        self.0.network_fsync()
+    }
+}
+
+fn post_fevent(scheme_file: &mut File, fd: usize, event: usize, data_len: usize) -> Result<()> {
+    scheme_file
+        .write(&syscall::Packet {
+            id: 0,
+            pid: 0,
+            uid: 0,
+            gid: 0,
+            a: syscall::number::SYS_FEVENT,
+            b: fd,
+            c: event,
+            d: data_len,
+        })
+        .map(|_| ())
+        .map_err(|e| Error::from_io_error(e, "failed to post fevent"))
 }

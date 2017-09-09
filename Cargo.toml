@@ -32,7 +32,12 @@ rand = "0.3"
 redox_event = { git = "https://github.com/redox-os/event.git" }
 redox_syscall = "0.1"
 
+[dependencies.log]
+version = "0.3"
+default-features = false
+features = ["release_max_level_off"]
+
 [dependencies.smoltcp]
 git = "https://github.com/m-labs/smoltcp.git"
 default-features = false
-features = ["std"] 
+features = ["std", "log"] 
