@@ -55,20 +55,26 @@ fn run() -> Result<()> {
     let ip_fd = syscall::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK)
         .map_err(|e| Error::from_syscall_error(e, "failed to open :ip"))? as RawFd;
 
+    trace!("opening :udp");
+    let udp_fd = syscall::open(":udp", O_RDWR | O_CREAT | O_NONBLOCK)
+        .map_err(|e| Error::from_syscall_error(e, "failed to open :udp"))? as
+        RawFd;
+
     let time_path = format!("time:{}", syscall::CLOCK_MONOTONIC);
     let time_fd = syscall::open(&time_path, syscall::O_RDWR)
         .map_err(|e| Error::from_syscall_error(e, "failed to open time:"))? as
         RawFd;
 
-    let (network_file, ip_file, time_file) = unsafe {
+    let (network_file, ip_file, time_file, udp_file) = unsafe {
         (
             File::from_raw_fd(network_fd),
             File::from_raw_fd(ip_fd),
             File::from_raw_fd(time_fd),
+            File::from_raw_fd(udp_fd),
         )
     };
     let smolnetd = Rc::new(RefCell::new(
-        Smolnetd::new(network_file, ip_file, time_file),
+        Smolnetd::new(network_file, ip_file, udp_file, time_file),
     ));
 
     let mut event_queue = EventQueue::<(), Error>::new()
@@ -89,6 +95,17 @@ fn run() -> Result<()> {
     event_queue
         .add(ip_fd, move |_| smolnetd_.borrow_mut().on_ip_scheme_event())
         .map_err(|e| Error::from_io_error(e, "failed to listen to ip events"))?;
+
+    let smolnetd_ = smolnetd.clone();
+
+    event_queue
+        .add(
+            udp_fd,
+            move |_| smolnetd_.borrow_mut().on_udp_scheme_event(),
+        )
+        .map_err(|e| {
+            Error::from_io_error(e, "failed to listen to udp events")
+        })?;
 
     event_queue
         .add(time_fd, move |_| smolnetd.borrow_mut().on_time_event())

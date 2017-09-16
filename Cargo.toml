@@ -38,6 +38,7 @@ default-features = false
 features = ["release_max_level_off"]
 
 [dependencies.smoltcp]
-git = "https://github.com/m-labs/smoltcp.git"
+git = "https://github.com/batonius/smoltcp.git"
+branch = "default_route"
 default-features = false
 features = ["std", "log"] 

@@ -11,7 +11,7 @@ pub struct NetworkDevice {
 }
 
 impl NetworkDevice {
-    pub const MTU: usize = 120;
+    pub const MTU: usize = 1520;
 
     pub fn new(
         network_file: Rc<RefCell<File>>,
