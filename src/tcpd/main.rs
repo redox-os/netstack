@@ -383,7 +383,7 @@ impl Tcpd {
                     if ! found_connection && tcp.header.flags.get() & (TCP_SYN | TCP_ACK) == TCP_SYN {
                         let mut new_handles = Vec::new();
 
-                        for (_id, handle) in self.handles.iter_mut() {
+                        for (id, handle) in self.handles.iter_mut() {
                             if let Handle::Tcp(ref mut handle) = *handle {
                                 if handle.state == State::Listen && handle.matches(&ip, &tcp) {
                                     handle.data.push_back((ip.clone(), tcp.clone()));
@@ -433,6 +433,21 @@ impl Tcpd {
                                         packet.a = id;
 
                                         new_handles.push((packet, Handle::Tcp(new_handle)));
+                                    }
+                                }
+
+                                if handle.events & EVENT_READ == EVENT_READ {
+                                    if let Some(&(ref _ip, ref tcp)) = handle.data.get(0) {
+                                        self.scheme_file.write(&Packet {
+                                            id: 0,
+                                            pid: 0,
+                                            uid: 0,
+                                            gid: 0,
+                                            a: syscall::number::SYS_FEVENT,
+                                            b: *id,
+                                            c: EVENT_READ,
+                                            d: tcp.data.len()
+                                        })?;
                                     }
                                 }
                             }
