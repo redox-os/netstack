@@ -14,7 +14,8 @@ use std::os::unix::io::FromRawFd;
 use std::rc::Rc;
 
 use event::EventQueue;
-use netutils::{n16, n32, Ipv4, Ipv4Addr, Ipv4Header, Tcp, TcpHeader, Checksum, TCP_FIN, TCP_SYN, TCP_RST, TCP_PSH, TCP_ACK};
+use netutils::{n16, n32, Ipv4, Ipv4Addr, Ipv4Header, Checksum};
+use netutils::tcp::{Tcp, TcpHeader, TCP_FIN, TCP_SYN, TCP_RST, TCP_PSH, TCP_ACK};
 use syscall::data::{Packet, TimeSpec};
 use syscall::error::{Error, Result, EACCES, EADDRINUSE, EBADF, EIO, EINVAL, EISCONN, EMSGSIZE, ENOTCONN, ETIMEDOUT, EWOULDBLOCK};
 use syscall::flag::{CLOCK_MONOTONIC, EVENT_READ, F_GETFL, F_SETFL, O_ACCMODE, O_CREAT, O_RDWR, O_NONBLOCK};
@@ -42,6 +43,12 @@ fn parse_socket(socket: &str) -> (Ipv4Addr, u16) {
     (host, port)
 }
 
+#[derive(Debug)]
+struct EmptyHandle {
+    privileged: bool,
+    flags: usize
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum State {
     Listen,
@@ -57,6 +64,7 @@ enum State {
     Closed
 }
 
+#[derive(Debug)]
 struct TcpHandle {
     local: (Ipv4Addr, u16),
     remote: (Ipv4Addr, u16),
@@ -131,14 +139,16 @@ impl TcpHandle {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 enum SettingKind {
     Ttl,
     ReadTimeout,
     WriteTimeout
 }
 
+#[derive(Debug)]
 enum Handle {
+    Empty(EmptyHandle),
     Tcp(TcpHandle),
     Setting(usize, SettingKind),
 }
@@ -434,20 +444,20 @@ impl Tcpd {
 
                                         new_handles.push((packet, Handle::Tcp(new_handle)));
                                     }
-                                }
 
-                                if handle.events & EVENT_READ == EVENT_READ {
-                                    if let Some(&(ref _ip, ref tcp)) = handle.data.get(0) {
-                                        self.scheme_file.write(&Packet {
-                                            id: 0,
-                                            pid: 0,
-                                            uid: 0,
-                                            gid: 0,
-                                            a: syscall::number::SYS_FEVENT,
-                                            b: *id,
-                                            c: EVENT_READ,
-                                            d: tcp.data.len()
-                                        })?;
+                                    if handle.events & EVENT_READ == EVENT_READ {
+                                        if let Some(&(ref _ip, ref tcp)) = handle.data.get(0) {
+                                            self.scheme_file.write(&Packet {
+                                                id: 0,
+                                                pid: 0,
+                                                uid: 0,
+                                                gid: 0,
+                                                a: syscall::number::SYS_FEVENT,
+                                                b: *id,
+                                                c: EVENT_READ,
+                                                d: tcp.data.len()
+                                            })?;
+                                        }
                                     }
                                 }
                             }
@@ -507,69 +517,66 @@ impl Tcpd {
 
         Ok(())
     }
-}
 
-impl SchemeMut for Tcpd {
-    fn open(&mut self, url: &[u8], flags: usize, uid: u32, _gid: u32) -> Result<usize> {
-        let path = str::from_utf8(url).or(Err(Error::new(EINVAL)))?;
+    fn inner_dup(&mut self, file: usize, path: &str) -> Result<Handle> {
+        Ok(match *self.handles.get_mut(&file).ok_or(Error::new(EBADF))? {
+            Handle::Empty(ref handle) => {
+                if path.is_empty() {
+                    Handle::Empty(EmptyHandle {
+                        privileged: handle.privileged,
+                        flags: handle.flags
+                    })
+                } else {
+                    let mut parts = path.split("/");
+                    let remote = parse_socket(parts.next().unwrap_or(""));
+                    let mut local = parse_socket(parts.next().unwrap_or(""));
 
-        let mut parts = path.split("/");
-        let remote = parse_socket(parts.next().unwrap_or(""));
-        let mut local = parse_socket(parts.next().unwrap_or(""));
+                    if local.1 == 0 {
+                        local.1 = self.rng.gen_range(32768, 65535);
+                    }
 
-        if local.1 == 0 {
-            local.1 = self.rng.gen_range(32768, 65535);
-        }
+                    if local.1 <= 1024 && ! handle.privileged {
+                        return Err(Error::new(EACCES));
+                    }
 
-        if local.1 <= 1024 && uid != 0 {
-            return Err(Error::new(EACCES));
-        }
+                    if self.ports.contains_key(&local.1) {
+                        return Err(Error::new(EADDRINUSE));
+                    }
 
-        if self.ports.contains_key(&local.1) {
-            return Err(Error::new(EADDRINUSE));
-        }
+                    let mut new_handle = TcpHandle {
+                        local: local,
+                        remote: remote,
+                        flags: handle.flags,
+                        events: 0,
+                        read_timeout: None,
+                        write_timeout: None,
+                        ttl: 64,
+                        state: State::Listen,
+                        seq: 0,
+                        ack: 0,
+                        data: VecDeque::new(),
+                        todo_dup: VecDeque::new(),
+                        todo_read: VecDeque::new(),
+                        todo_write: VecDeque::new(),
+                    };
 
-        let mut handle = TcpHandle {
-            local: local,
-            remote: remote,
-            flags: flags,
-            events: 0,
-            read_timeout: None,
-            write_timeout: None,
-            ttl: 64,
-            state: State::Listen,
-            seq: 0,
-            ack: 0,
-            data: VecDeque::new(),
-            todo_dup: VecDeque::new(),
-            todo_read: VecDeque::new(),
-            todo_write: VecDeque::new(),
-        };
+                    if new_handle.is_connected() {
+                        new_handle.seq = self.rng.gen();
+                        new_handle.ack = 0;
+                        new_handle.state = State::SynSent;
 
-        if handle.is_connected() {
-            handle.seq = self.rng.gen();
-            handle.ack = 0;
-            handle.state = State::SynSent;
+                        let tcp = new_handle.create_tcp(TCP_SYN, Vec::new());
+                        let ip = new_handle.create_ip(self.rng.gen(), tcp.to_bytes());
+                        self.tcp_file.write(&ip.to_bytes()).map_err(|err| Error::new(err.raw_os_error().unwrap_or(EIO)))?;
 
-            let tcp = handle.create_tcp(TCP_SYN, Vec::new());
-            let ip = handle.create_ip(self.rng.gen(), tcp.to_bytes());
-            self.tcp_file.write(&ip.to_bytes()).map_err(|err| Error::new(err.raw_os_error().unwrap_or(EIO)))?;
+                        new_handle.seq += 1;
+                    }
 
-            handle.seq += 1;
-        }
+                    self.ports.insert(new_handle.local.1, 1);
 
-        self.ports.insert(local.1, 1);
-
-        let id = self.next_id;
-        self.next_id += 1;
-
-        self.handles.insert(id, Handle::Tcp(handle));
-
-        Ok(id)
-    }
-
-    fn dup(&mut self, file: usize, buf: &[u8]) -> Result<usize> {
-        let handle = match *self.handles.get_mut(&file).ok_or(Error::new(EBADF))? {
+                    Handle::Tcp(new_handle)
+                }
+            },
             Handle::Tcp(ref mut handle) => {
                 let mut new_handle = TcpHandle {
                     local: handle.local,
@@ -587,8 +594,6 @@ impl SchemeMut for Tcpd {
                     todo_read: VecDeque::new(),
                     todo_write: VecDeque::new(),
                 };
-
-                let path = str::from_utf8(buf).or(Err(Error::new(EINVAL)))?;
 
                 if path == "ttl" {
                     Handle::Setting(file, SettingKind::Ttl)
@@ -608,7 +613,7 @@ impl SchemeMut for Tcpd {
 
                         let tcp = new_handle.create_tcp(TCP_SYN | TCP_ACK, Vec::new());
                         let ip = new_handle.create_ip(self.rng.gen(), tcp.to_bytes());
-                        self.tcp_file.write(&ip.to_bytes()).map_err(|err| Error::new(err.raw_os_error().unwrap_or(EIO))).and(Ok(buf.len()))?;
+                        self.tcp_file.write(&ip.to_bytes()).map_err(|err| Error::new(err.raw_os_error().unwrap_or(EIO)))?;
 
                         new_handle.seq += 1;
                     } else {
@@ -628,41 +633,45 @@ impl SchemeMut for Tcpd {
                     new_handle.data = handle.data.clone();
 
                     Handle::Tcp(new_handle)
-                } else if handle.is_connected() {
-                    return Err(Error::new(EISCONN));
                 } else {
-                    new_handle.remote = parse_socket(path);
-
-                    if new_handle.is_connected() {
-                        new_handle.seq = self.rng.gen();
-                        new_handle.ack = 0;
-                        new_handle.state = State::SynSent;
-
-                        handle.data.retain(|&(ref ip, ref tcp)| {
-                            if new_handle.matches(ip, tcp) {
-                                new_handle.data.push_back((ip.clone(), tcp.clone()));
-                                false
-                            } else {
-                                true
-                            }
-                        });
-
-                        let tcp = new_handle.create_tcp(TCP_SYN, Vec::new());
-                        let ip = new_handle.create_ip(self.rng.gen(), tcp.to_bytes());
-                        self.tcp_file.write(&ip.to_bytes()).map_err(|err| Error::new(err.raw_os_error().unwrap_or(EIO))).and(Ok(buf.len()))?;
-
-                        new_handle.seq += 1;
-
-                        Handle::Tcp(new_handle)
-                    } else {
-                        return Err(Error::new(EINVAL));
-                    }
+                    return Err(Error::new(EINVAL));
                 }
             },
             Handle::Setting(file, kind) => {
                 Handle::Setting(file, kind)
             }
-        };
+        })
+    }
+}
+
+impl SchemeMut for Tcpd {
+    fn open(&mut self, url: &[u8], flags: usize, uid: u32, _gid: u32) -> Result<usize> {
+        let path = str::from_utf8(url).or(Err(Error::new(EINVAL)))?;
+
+        let id = self.next_id;
+        self.next_id += 1;
+
+        self.handles.insert(id, Handle::Empty(EmptyHandle {
+            privileged: uid == 0,
+            flags: flags
+        }));
+
+        match self.inner_dup(id, path) {
+            Ok(handle) => {
+                self.handles.insert(id, handle);
+                Ok(id)
+            },
+            Err(err) => {
+                self.handles.remove(&id);
+                Err(err)
+            }
+        }
+    }
+
+    fn dup(&mut self, file: usize, buf: &[u8]) -> Result<usize> {
+        let path = str::from_utf8(buf).or(Err(Error::new(EINVAL)))?;
+
+        let handle = self.inner_dup(file, path)?;
 
         let id = self.next_id;
         self.next_id += 1;
@@ -674,6 +683,9 @@ impl SchemeMut for Tcpd {
 
     fn read(&mut self, file: usize, buf: &mut [u8]) -> Result<usize> {
         let (file, kind) = match *self.handles.get_mut(&file).ok_or(Error::new(EBADF))? {
+            Handle::Empty(ref _handle) => {
+                return Err(Error::new(EBADF));
+            },
             Handle::Tcp(ref mut handle) => {
                 if ! handle.is_connected() {
                     return Err(Error::new(ENOTCONN));
@@ -730,6 +742,9 @@ impl SchemeMut for Tcpd {
 
     fn write(&mut self, file: usize, buf: &[u8]) -> Result<usize> {
         let (file, kind) = match *self.handles.get_mut(&file).ok_or(Error::new(EBADF))? {
+            Handle::Empty(ref _handle) => {
+                return Err(Error::new(EBADF));
+            },
             Handle::Tcp(ref mut handle) => {
                 if ! handle.is_connected() {
                     return Err(Error::new(ENOTCONN));
@@ -790,17 +805,28 @@ impl SchemeMut for Tcpd {
     }
 
     fn fcntl(&mut self, file: usize, cmd: usize, arg: usize) -> Result<usize> {
-        if let Handle::Tcp(ref mut handle) = *self.handles.get_mut(&file).ok_or(Error::new(EBADF))? {
-            match cmd {
-                F_GETFL => Ok(handle.flags),
-                F_SETFL => {
-                    handle.flags = arg & ! O_ACCMODE;
-                    Ok(0)
-                },
-                _ => Err(Error::new(EINVAL))
+        match *self.handles.get_mut(&file).ok_or(Error::new(EBADF))? {
+            Handle::Empty(ref mut handle) => {
+                match cmd {
+                    F_GETFL => Ok(handle.flags),
+                    F_SETFL => {
+                        handle.flags = arg & ! O_ACCMODE;
+                        Ok(0)
+                    },
+                    _ => Err(Error::new(EINVAL))
+                }
+            },
+            Handle::Tcp(ref mut handle) => {
+                match cmd {
+                    F_GETFL => Ok(handle.flags),
+                    F_SETFL => {
+                        handle.flags = arg & ! O_ACCMODE;
+                        Ok(0)
+                    },
+                    _ => Err(Error::new(EINVAL))
+                }
             }
-        } else {
-            Err(Error::new(EBADF))
+            _ => Err(Error::new(EBADF))
         }
     }
 

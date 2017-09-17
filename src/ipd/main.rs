@@ -3,7 +3,8 @@ extern crate netutils;
 extern crate syscall;
 
 use event::EventQueue;
-use netutils::{Ipv4Addr, Ipv4, Tcp};
+use netutils::{Ipv4Addr, Ipv4};
+use netutils::tcp::Tcp;
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
