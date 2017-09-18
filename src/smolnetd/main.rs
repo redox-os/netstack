@@ -17,30 +17,12 @@ use std::rc::Rc;
 mod error;
 mod device;
 mod scheme;
-
-struct SimpleLogger;
-
-impl log::Log for SimpleLogger {
-    fn enabled(&self, _metadata: &log::LogMetadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::LogRecord) {
-        if self.enabled(record.metadata()) {
-            println!("{} : {}", record.level(), record.args());
-        }
-    }
-}
+mod logger;
 
 fn run() -> Result<()> {
     use syscall::flag::*;
 
-    unsafe {
-        log::set_logger_raw(|max_log_level| {
-            max_log_level.set(log::LogLevelFilter::Trace);
-            &SimpleLogger
-        }).expect("Can't initialize logger");
-    }
+    logger::init_logger();
 
     // if unsafe { syscall::clone(0).unwrap() } != 0 {
     //     return Ok(());
@@ -73,6 +55,7 @@ fn run() -> Result<()> {
             File::from_raw_fd(udp_fd),
         )
     };
+
     let smolnetd = Rc::new(RefCell::new(
         Smolnetd::new(network_file, ip_file, udp_file, time_file),
     ));
