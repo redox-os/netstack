@@ -1,9 +1,10 @@
-use std::rc::Rc;
-use std::fs::File;
-use std::cell::RefCell;
-use std::io::Write;
-use std::collections::VecDeque;
 use smoltcp;
+use std::cell::RefCell;
+use std::collections::VecDeque;
+use std::fs::File;
+use std::io::Write;
+use std::rc::Rc;
+
 use buffer_pool::Buffer;
 
 pub struct NetworkDevice {

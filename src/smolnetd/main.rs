@@ -5,20 +5,21 @@ extern crate netutils;
 extern crate smoltcp;
 extern crate syscall;
 
-use error::{Error, Result};
-use event::EventQueue;
-use scheme::Smolnetd;
 use std::cell::RefCell;
 use std::fs::File;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
 
-mod error;
+use error::{Error, Result};
+use event::EventQueue;
+use scheme::Smolnetd;
+
 mod buffer_pool;
 mod device;
-mod scheme;
+mod error;
 mod logger;
+mod scheme;
 
 fn run() -> Result<()> {
     use syscall::flag::*;
