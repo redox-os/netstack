@@ -1,5 +1,3 @@
-use device::NetworkDevice;
-use error::{Error, Result};
 use netutils::{getcfg, MacAddr};
 use smoltcp;
 use std::collections::{BTreeMap, VecDeque};
@@ -14,6 +12,10 @@ use std::cell::RefCell;
 use smoltcp::socket::AsSocket;
 use syscall::SchemeMut;
 use syscall;
+
+use device::NetworkDevice;
+use error::{Error, Result};
+use buffer_pool::{Buffer, BufferPool};
 
 struct RawHandle {
     flags: usize,
@@ -43,14 +45,16 @@ pub struct Smolnetd {
     raw_sockets: BTreeMap<usize, RawHandle>,
     udp_sockets: BTreeMap<usize, UdpHandle>,
 
-    input_queue: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    input_queue: Rc<RefCell<VecDeque<Buffer>>>,
+    input_buffer_pool: BufferPool,
 }
 
 struct IpScheme<'a>(&'a mut Smolnetd);
 struct UdpScheme<'a>(&'a mut Smolnetd);
 
 impl Smolnetd {
-    const IP_BUFFER_SIZE: usize = 128;
+    const INGRESS_PACKET_SIZE: usize = 2048;
+    const SOCKET_BUFFER_SIZE: usize = 128; //packets
     const CHECK_TIMEOUT_MS: i64 = 1000;
 
     pub fn new(network_file: File, ip_file: File, udp_file: File, time_file: File) -> Smolnetd {
@@ -93,6 +97,7 @@ impl Smolnetd {
             next_fd: 0,
             input_queue,
             network_file,
+            input_buffer_pool: BufferPool::new(Self::INGRESS_PACKET_SIZE),
         }
     }
 
@@ -155,7 +160,7 @@ impl Smolnetd {
     fn read_frames(&mut self) -> Result<usize> {
         let mut total_frames = 0;
         loop {
-            let mut buffer = vec![0; 65536];
+            let mut buffer = self.input_buffer_pool.get_buffer();
             let count = self.network_file
                 .borrow_mut()
                 .read(&mut buffer)
@@ -166,7 +171,7 @@ impl Smolnetd {
                 break;
             }
             trace!("got frame {}", count);
-            buffer.resize(count, 0);
+            buffer.resize(count);
             self.input_queue.borrow_mut().push_back(buffer);
             total_frames += 1;
         }
@@ -206,9 +211,9 @@ impl<'a> syscall::SchemeMut for IpScheme<'a> {
         let path = str::from_utf8(url).or_else(|_| Err(syscall::Error::new(syscall::EINVAL)))?;
         let proto = u8::from_str_radix(path, 16).or(Err(syscall::Error::new(syscall::ENOENT)))?;
 
-        let mut rx_packets = Vec::with_capacity(Smolnetd::IP_BUFFER_SIZE);
-        let mut tx_packets = Vec::with_capacity(Smolnetd::IP_BUFFER_SIZE);
-        for _ in 0..Smolnetd::IP_BUFFER_SIZE {
+        let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
+        let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
+        for _ in 0..Smolnetd::SOCKET_BUFFER_SIZE {
             rx_packets.push(smoltcp::socket::RawPacketBuffer::new(
                 vec![0; NetworkDevice::MTU],
             ));
@@ -269,7 +274,6 @@ impl<'a> syscall::SchemeMut for IpScheme<'a> {
     }
 
     fn read(&mut self, fd: usize, buf: &mut [u8]) -> syscall::Result<usize> {
-        trace!("Read {}", fd);
         use smoltcp::socket::AsSocket;
 
         let handle = self.0
@@ -280,6 +284,7 @@ impl<'a> syscall::SchemeMut for IpScheme<'a> {
             self.0.socket_set.get_mut(handle.socket_handle).as_socket();
         if socket.can_recv() {
             let length = socket.recv_slice(buf).expect("Can't receive slice");
+            trace!("Read fd {} len {}", fd, length);
             Ok(length)
         } else if handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Ok(0)
@@ -322,9 +327,9 @@ impl<'a> syscall::SchemeMut for UdpScheme<'a> {
         let (remote_ip, remote_port) = parse_socket(parts.next().unwrap_or(""));
         let (local_ip, local_port) = parse_socket(parts.next().unwrap_or(""));
 
-        let mut rx_packets = Vec::with_capacity(Smolnetd::IP_BUFFER_SIZE);
-        let mut tx_packets = Vec::with_capacity(Smolnetd::IP_BUFFER_SIZE);
-        for _ in 0..Smolnetd::IP_BUFFER_SIZE {
+        let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
+        let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
+        for _ in 0..Smolnetd::SOCKET_BUFFER_SIZE {
             rx_packets.push(smoltcp::socket::UdpPacketBuffer::new(
                 vec![0; NetworkDevice::MTU],
             ));

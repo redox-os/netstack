@@ -4,10 +4,11 @@ use std::cell::RefCell;
 use std::io::Write;
 use std::collections::VecDeque;
 use smoltcp;
+use buffer_pool::Buffer;
 
 pub struct NetworkDevice {
     network_file: Rc<RefCell<File>>,
-    input_queue: Rc<RefCell<VecDeque<Vec<u8>>>>,
+    input_queue: Rc<RefCell<VecDeque<Buffer>>>,
 }
 
 impl NetworkDevice {
@@ -15,7 +16,7 @@ impl NetworkDevice {
 
     pub fn new(
         network_file: Rc<RefCell<File>>,
-        input_queue: Rc<RefCell<VecDeque<Vec<u8>>>>,
+        input_queue: Rc<RefCell<VecDeque<Buffer>>>,
     ) -> NetworkDevice {
         NetworkDevice {
             network_file,
@@ -48,7 +49,7 @@ impl Drop for TxBuffer {
 }
 
 impl smoltcp::phy::Device for NetworkDevice {
-    type RxBuffer = Vec<u8>;
+    type RxBuffer = Buffer;
     type TxBuffer = TxBuffer;
 
     fn limits(&self) -> smoltcp::phy::DeviceLimits {

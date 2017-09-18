@@ -15,6 +15,7 @@ use std::process;
 use std::rc::Rc;
 
 mod error;
+mod buffer_pool;
 mod device;
 mod scheme;
 mod logger;
