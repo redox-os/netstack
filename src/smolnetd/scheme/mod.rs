@@ -1,11 +1,10 @@
-use netutils::{getcfg, MacAddr};
+use netutils::getcfg;
 use smoltcp;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::mem;
-use std::net::Ipv4Addr;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Instant;
@@ -48,21 +47,14 @@ impl Smolnetd {
 
     pub fn new(network_file: File, ip_file: File, udp_file: File, time_file: File) -> Smolnetd {
         let arp_cache = smoltcp::iface::SliceArpCache::new(vec![Default::default(); 8]);
-        //TODO Use smoltcp::wire::EthernetAddress::from_str
-        let mac_addr = MacAddr::from_str(&getcfg("mac").unwrap().trim());
-        let hardware_addr = smoltcp::wire::EthernetAddress(mac_addr.bytes);
-        //TODO Use smoltcp::wire::Ipv4Addr::from_str
-        let ip_bytes = Ipv4Addr::from_str(&getcfg("ip").unwrap().trim())
-            .unwrap()
-            .octets();
-        let protocol_addrs = [
-            smoltcp::wire::IpAddress::Ipv4(smoltcp::wire::Ipv4Address::from_bytes(&ip_bytes)),
-        ];
-        let default_gw = smoltcp::wire::IpAddress::Ipv4(smoltcp::wire::Ipv4Address::from_bytes(
-            &Ipv4Addr::from_str(&getcfg("ip_router").unwrap().trim())
-                .unwrap()
-                .octets(),
-        ));
+        let hardware_addr = smoltcp::wire::EthernetAddress::from_str(
+            &getcfg("mac").unwrap().trim(),
+        ).expect("Can't parse the 'mac' cfg");
+        let local_ip = smoltcp::wire::IpAddress::from_str(&getcfg("ip").unwrap().trim())
+            .expect("Can't parse the 'ip' cfg.");
+        let protocol_addrs = [local_ip];
+        let default_gw = smoltcp::wire::IpAddress::from_str(&getcfg("ip_router").unwrap().trim())
+            .expect("Can't parse the 'ip_router' cfg.");
         trace!("mac {:?} ip {:?}", hardware_addr, protocol_addrs);
         let input_queue = Rc::new(RefCell::new(VecDeque::new()));
         let network_file = Rc::new(RefCell::new(network_file));

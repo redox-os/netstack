@@ -1,7 +1,7 @@
-use netutils::Ipv4Addr;
 use smoltcp::socket::{AsSocket, SocketHandle, UdpPacketBuffer, UdpSocket, UdpSocketBuffer};
 use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
 use std::collections::BTreeMap;
+use std::str::FromStr;
 use std::str;
 use syscall;
 
@@ -83,13 +83,10 @@ impl syscall::SchemeMut for UdpScheme {
         let tx_buffer = UdpSocketBuffer::new(tx_packets);
         let mut udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
 
-        if local_ip != Ipv4Addr::NULL && local_port != 0 {
+        if !local_ip.is_unspecified() && local_port != 0 {
             let udp_socket: &mut UdpSocket = udp_socket.as_socket();
             udp_socket
-                .bind(IpEndpoint::new(
-                    IpAddress::Ipv4(Ipv4Address::from_bytes(&local_ip.bytes)),
-                    local_port,
-                ))
+                .bind(IpEndpoint::new(local_ip, local_port))
                 .unwrap();
         }
 
@@ -102,10 +99,7 @@ impl syscall::SchemeMut for UdpScheme {
                 flags,
                 events: 0,
                 socket_handle,
-                remote_endpoint: IpEndpoint::new(
-                    IpAddress::Ipv4(Ipv4Address::from_bytes(&remote_ip.bytes)),
-                    remote_port,
-                ),
+                remote_endpoint: IpEndpoint::new(remote_ip, remote_port),
             }),
         );
         self.next_udp_fd += 1;
@@ -213,9 +207,13 @@ impl syscall::SchemeMut for UdpScheme {
     }
 }
 
-fn parse_socket(socket: &str) -> (Ipv4Addr, u16) {
+fn parse_socket(socket: &str) -> (IpAddress, u16) {
     let mut socket_parts = socket.split(":");
-    let host = Ipv4Addr::from_str(socket_parts.next().unwrap_or(""));
+    let host = IpAddress::Ipv4(
+        Ipv4Address::from_str(socket_parts.next().unwrap_or(""))
+            .unwrap_or_else(|_| Ipv4Address::new(0, 0, 0, 0)),
+    );
+
     let port = socket_parts
         .next()
         .unwrap_or("")
