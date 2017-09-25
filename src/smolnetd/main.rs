@@ -20,6 +20,7 @@ mod device;
 mod error;
 mod logger;
 mod scheme;
+mod port_set;
 
 fn run() -> Result<()> {
     use syscall::flag::*;
