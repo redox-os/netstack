@@ -86,7 +86,7 @@ impl BufferPool {
 
         Buffer {
             buffer,
-            stack: self.stack.clone(),
+            stack: Rc::clone(&self.stack),
         }
     }
 }

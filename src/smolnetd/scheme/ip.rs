@@ -47,7 +47,7 @@ impl IpScheme {
     }
 
     pub fn notify_sockets(&mut self) -> Result<()> {
-        for (&fd, ref handle) in &self.raw_sockets {
+        for (&fd, handle) in &self.raw_sockets {
             let mut socket_set = self.socket_set.borrow_mut();
             let socket: &mut RawSocket = socket_set.get_mut(handle.socket_handle).as_socket();
             if socket.can_send() {
@@ -66,7 +66,8 @@ impl<'a> syscall::SchemeMut for IpScheme {
             return Err(syscall::Error::new(syscall::EACCES));
         }
         let path = str::from_utf8(url).or_else(|_| Err(syscall::Error::new(syscall::EINVAL)))?;
-        let proto = u8::from_str_radix(path, 16).or(Err(syscall::Error::new(syscall::ENOENT)))?;
+        let proto =
+            u8::from_str_radix(path, 16).or_else(|_| Err(syscall::Error::new(syscall::ENOENT)))?;
 
         let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
         let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);

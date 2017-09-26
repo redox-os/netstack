@@ -33,8 +33,8 @@ fn run() -> Result<()> {
 
     trace!("opening network:");
     let network_fd = syscall::open("network:", O_RDWR | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open network:"))? as
-        RawFd;
+        .map_err(|e| Error::from_syscall_error(e, "failed to open network:"))?
+        as RawFd;
 
     trace!("opening :ip");
     let ip_fd = syscall::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK)
@@ -42,13 +42,13 @@ fn run() -> Result<()> {
 
     trace!("opening :udp");
     let udp_fd = syscall::open(":udp", O_RDWR | O_CREAT | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open :udp"))? as
-        RawFd;
+        .map_err(|e| Error::from_syscall_error(e, "failed to open :udp"))?
+        as RawFd;
 
     let time_path = format!("time:{}", syscall::CLOCK_MONOTONIC);
     let time_fd = syscall::open(&time_path, syscall::O_RDWR)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open time:"))? as
-        RawFd;
+        .map_err(|e| Error::from_syscall_error(e, "failed to open time:"))?
+        as RawFd;
 
     let (network_file, ip_file, time_file, udp_file) = unsafe {
         (
@@ -66,7 +66,7 @@ fn run() -> Result<()> {
     let mut event_queue = EventQueue::<(), Error>::new()
         .map_err(|e| Error::from_io_error(e, "failed to create event queue"))?;
 
-    let smolnetd_ = smolnetd.clone();
+    let smolnetd_ = Rc::clone(&smolnetd);
 
     event_queue
         .add(network_fd, move |_| {
@@ -76,13 +76,13 @@ fn run() -> Result<()> {
             Error::from_io_error(e, "failed to listen to network events")
         })?;
 
-    let smolnetd_ = smolnetd.clone();
+    let smolnetd_ = Rc::clone(&smolnetd);
 
     event_queue
         .add(ip_fd, move |_| smolnetd_.borrow_mut().on_ip_scheme_event())
         .map_err(|e| Error::from_io_error(e, "failed to listen to ip events"))?;
 
-    let smolnetd_ = smolnetd.clone();
+    let smolnetd_ = Rc::clone(&smolnetd);
 
     event_queue
         .add(

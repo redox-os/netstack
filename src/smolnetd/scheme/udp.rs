@@ -5,7 +5,11 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::str::FromStr;
 use std::str;
+use std::mem;
+use std::ops::Deref;
+use std::ops::DerefMut;
 use syscall::SchemeMut;
+use syscall::data::TimeSpec;
 use syscall;
 
 use device::NetworkDevice;
@@ -14,6 +18,7 @@ use super::{Smolnetd, SocketSet};
 use port_set::PortSet;
 use super::post_fevent;
 
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum Setting {
     Ttl,
     ReadTimeout,
@@ -24,19 +29,27 @@ struct UdpHandle {
     flags: usize,
     events: usize,
     remote_endpoint: IpEndpoint,
+    read_timeout: Option<TimeSpec>,
+    write_timeout: Option<TimeSpec>,
     socket_handle: SocketHandle,
 }
 
+struct SettingHandle {
+    fd: usize,
+    socket_handle: SocketHandle,
+    setting: Setting,
+}
+
 enum FdHandle {
-    Setting(SocketHandle, Setting),
+    Setting(SettingHandle),
     Socket(UdpHandle),
 }
 
 impl FdHandle {
     fn socket_handle(&self) -> SocketHandle {
         match *self {
-            FdHandle::Socket(UdpHandle { socket_handle, .. }) => socket_handle,
-            FdHandle::Setting(socket_handle, _) => socket_handle,
+            FdHandle::Socket(UdpHandle { socket_handle, .. }) |
+            FdHandle::Setting(SettingHandle { socket_handle, .. }) => socket_handle,
         }
     }
 }
@@ -56,7 +69,7 @@ impl UdpScheme {
             udp_fds: BTreeMap::new(),
             socket_set,
             // 49152..65535 is the suggested range for dynamic private ports
-            port_set: PortSet::new(49152u16, 65535u16).expect("Wrong UDP port numbers"),
+            port_set: PortSet::new(49_152u16, 65_535u16).expect("Wrong UDP port numbers"),
             udp_file,
         }
     }
@@ -75,7 +88,7 @@ impl UdpScheme {
 
     pub fn notify_sockets(&mut self) -> Result<()> {
         for (&fd, handle) in &self.udp_fds {
-            if let &FdHandle::Socket(UdpHandle { socket_handle, .. }) = handle {
+            if let FdHandle::Socket(UdpHandle { socket_handle, .. }) = *handle {
                 let mut socket_set = self.socket_set.borrow_mut();
                 let socket: &mut UdpSocket = socket_set.get_mut(socket_handle).as_socket();
                 if socket.can_send() {
@@ -85,6 +98,83 @@ impl UdpScheme {
         }
         Ok(())
     }
+
+    fn get_setting(
+        &mut self,
+        fd: usize,
+        setting: Setting,
+        buf: &mut [u8],
+    ) -> syscall::Result<usize> {
+        let handle = self.udp_fds
+            .get_mut(&fd)
+            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+        let handle = match *handle {
+            FdHandle::Socket(ref mut handle) => handle,
+            _ => {
+                return Err(syscall::Error::new(syscall::EBADF));
+            }
+        };
+        let timespec = match (setting, handle.read_timeout, handle.write_timeout) {
+            (Setting::ReadTimeout, Some(read_timeout), _) => read_timeout,
+            (Setting::WriteTimeout, _, Some(write_timeout)) => write_timeout,
+            _ => {
+                return Ok(0);
+            }
+        };
+
+        if buf.len() < mem::size_of::<TimeSpec>() {
+            Ok(0)
+        } else {
+            let count = timespec.deref().read(buf).map_err(|err| {
+                syscall::Error::new(err.raw_os_error().unwrap_or(syscall::EIO))
+            })?;
+            Ok(count)
+        }
+    }
+
+    fn update_setting(
+        &mut self,
+        fd: usize,
+        setting: Setting,
+        buf: &[u8],
+    ) -> syscall::Result<usize> {
+        let handle = self.udp_fds
+            .get_mut(&fd)
+            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+        let handle = match *handle {
+            FdHandle::Socket(ref mut handle) => handle,
+            _ => {
+                return Err(syscall::Error::new(syscall::EBADF));
+            }
+        };
+        match setting {
+            Setting::ReadTimeout | Setting::WriteTimeout => {
+                let (timeout, count) = {
+                    if buf.len() < mem::size_of::<TimeSpec>() {
+                        (None, 0)
+                    } else {
+                        let mut timespec = TimeSpec::default();
+                        let count = timespec.deref_mut().write(buf).map_err(|err| {
+                            syscall::Error::new(err.raw_os_error().unwrap_or(syscall::EIO))
+                        })?;
+                        (Some(timespec), count)
+                    }
+                };
+                match setting {
+                    Setting::ReadTimeout => {
+                        handle.read_timeout = timeout;
+                    }
+                    Setting::WriteTimeout => {
+                        handle.write_timeout = timeout;
+                    }
+                    _ => {}
+                };
+                return Ok(count);
+            }
+            Setting::Ttl => {}
+        }
+        Ok(0)
+    }
 }
 
 impl syscall::SchemeMut for UdpScheme {
@@ -93,7 +183,7 @@ impl syscall::SchemeMut for UdpScheme {
 
         trace!("Udp open {} ", path);
 
-        let mut parts = path.split("/");
+        let mut parts = path.split('/');
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
         let mut local_endpoint = parse_endpoint(parts.next().unwrap_or(""));
 
@@ -135,6 +225,8 @@ impl syscall::SchemeMut for UdpScheme {
                 flags,
                 events: 0,
                 socket_handle,
+                write_timeout: None,
+                read_timeout: None,
                 remote_endpoint: remote_endpoint,
             }),
         );
@@ -169,53 +261,60 @@ impl syscall::SchemeMut for UdpScheme {
     fn write(&mut self, fd: usize, buf: &[u8]) -> syscall::Result<usize> {
         trace!("Upd write {} len {}", fd, buf.len());
 
-        let handle = self.udp_fds
-            .get(&fd)
-            .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
-        match *handle {
-            FdHandle::Setting(_, _) => {
-                //TODO: udp settings
-                // pretend we've accepted
-            }
-            FdHandle::Socket(ref handle) => {
-                if !handle.remote_endpoint.is_specified() {
-                    return Err(syscall::Error::new(syscall::EADDRNOTAVAIL));
+        let (fd, setting) = {
+            let handle = self.udp_fds
+                .get(&fd)
+                .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+
+            match *handle {
+                FdHandle::Setting(ref setting_handle) => {
+                    (setting_handle.fd, setting_handle.setting)
                 }
-                let mut socket_set = self.socket_set.borrow_mut();
-                let socket: &mut UdpSocket = socket_set.get_mut(handle.socket_handle).as_socket();
-                socket
-                    .send_slice(buf, handle.remote_endpoint)
-                    .expect("Can't send slice");
+                FdHandle::Socket(ref handle) => {
+                    if !handle.remote_endpoint.is_specified() {
+                        return Err(syscall::Error::new(syscall::EADDRNOTAVAIL));
+                    }
+                    let mut socket_set = self.socket_set.borrow_mut();
+                    let socket: &mut UdpSocket =
+                        socket_set.get_mut(handle.socket_handle).as_socket();
+                    socket
+                        .send_slice(buf, handle.remote_endpoint)
+                        .expect("Can't send slice");
+                    return Ok(buf.len());
+                }
             }
-        }
-        Ok(buf.len())
+        };
+        self.update_setting(fd, setting, buf)
     }
 
     fn read(&mut self, fd: usize, buf: &mut [u8]) -> syscall::Result<usize> {
         trace!("udp read {} {}", fd, buf.len());
-        let handle = self.udp_fds.get(&fd).ok_or_else(|| {
-            trace!("UDP read EBADF {}", fd);
-            syscall::Error::new(syscall::EBADF)
-        })?;
-        match *handle {
-            FdHandle::Setting(_, _) => {
-                //TODO: udp settings
-                Ok(buf.len())
-            }
-            FdHandle::Socket(ref handle) => {
-                let mut socket_set = self.socket_set.borrow_mut();
-                let socket: &mut UdpSocket = socket_set.get_mut(handle.socket_handle).as_socket();
-                if socket.can_recv() {
-                    let (length, _) = socket.recv_slice(buf).expect("Can't receive slice");
-                    trace!("Upd read {}", fd);
-                    Ok(length)
-                } else if handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-                    Ok(0)
-                } else {
-                    Err(syscall::Error::new(syscall::EWOULDBLOCK))
+        let (fd, setting) = {
+            let handle = self.udp_fds.get(&fd).ok_or_else(|| {
+                trace!("UDP read EBADF {}", fd);
+                syscall::Error::new(syscall::EBADF)
+            })?;
+            match *handle {
+                FdHandle::Setting(ref setting_handle) => {
+                    (setting_handle.fd, setting_handle.setting)
+                }
+                FdHandle::Socket(ref handle) => {
+                    let mut socket_set = self.socket_set.borrow_mut();
+                    let socket: &mut UdpSocket =
+                        socket_set.get_mut(handle.socket_handle).as_socket();
+                    return if socket.can_recv() {
+                        let (length, _) = socket.recv_slice(buf).expect("Can't receive slice");
+                        trace!("Upd read {}", fd);
+                        Ok(length)
+                    } else if handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
+                        Ok(0)
+                    } else {
+                        Err(syscall::Error::new(syscall::EWOULDBLOCK))
+                    };
                 }
             }
-        }
+        };
+        self.get_setting(fd, setting, buf)
     }
 
     fn dup(&mut self, fd: usize, buf: &[u8]) -> syscall::Result<usize> {
@@ -230,15 +329,29 @@ impl syscall::SchemeMut for UdpScheme {
             let socket_handle = handle.socket_handle();
 
             match path {
-                "ttl" => FdHandle::Setting(socket_handle, Setting::Ttl),
-                "read_timeout" => FdHandle::Setting(socket_handle, Setting::ReadTimeout),
-                "write_timeout" => FdHandle::Setting(socket_handle, Setting::WriteTimeout),
+                "ttl" => FdHandle::Setting(SettingHandle {
+                    socket_handle,
+                    fd,
+                    setting: Setting::Ttl,
+                }),
+                "read_timeout" => FdHandle::Setting(SettingHandle {
+                    socket_handle,
+                    fd,
+                    setting: Setting::ReadTimeout,
+                }),
+                "write_timeout" => FdHandle::Setting(SettingHandle {
+                    socket_handle,
+                    fd,
+                    setting: Setting::WriteTimeout,
+                }),
                 _ => {
                     let remote_endpoint = parse_endpoint(path);
-                    if let &mut FdHandle::Socket(ref udp_handle) = handle {
+                    if let FdHandle::Socket(ref udp_handle) = *handle {
                         FdHandle::Socket(UdpHandle {
                             flags: udp_handle.flags,
                             events: udp_handle.events,
+                            read_timeout: udp_handle.read_timeout,
+                            write_timeout: udp_handle.write_timeout,
                             remote_endpoint: if remote_endpoint.is_specified() {
                                 remote_endpoint
                             } else {
@@ -250,6 +363,8 @@ impl syscall::SchemeMut for UdpScheme {
                         FdHandle::Socket(UdpHandle {
                             flags: 0,
                             events: 0,
+                            read_timeout: None,
+                            write_timeout: None,
                             remote_endpoint: remote_endpoint,
                             socket_handle,
                         })
@@ -279,7 +394,7 @@ impl syscall::SchemeMut for UdpScheme {
             .get_mut(&fd)
             .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
         match *handle {
-            FdHandle::Setting(_, _) => Err(syscall::Error::new(syscall::EBADF)),
+            FdHandle::Setting(_) => Err(syscall::Error::new(syscall::EBADF)),
             FdHandle::Socket(ref mut handle) => {
                 handle.events = events;
                 Ok(fd)
@@ -301,7 +416,7 @@ impl syscall::SchemeMut for UdpScheme {
 }
 
 fn parse_endpoint(socket: &str) -> IpEndpoint {
-    let mut socket_parts = socket.split(":");
+    let mut socket_parts = socket.split(':');
     let host = IpAddress::Ipv4(
         Ipv4Address::from_str(socket_parts.next().unwrap_or(""))
             .unwrap_or_else(|_| Ipv4Address::new(0, 0, 0, 0)),

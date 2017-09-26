@@ -69,7 +69,7 @@ impl smoltcp::phy::Device for NetworkDevice {
 
     fn transmit(&mut self, _timestamp: u64, length: usize) -> smoltcp::Result<Self::TxBuffer> {
         Ok(TxBuffer {
-            network_file: self.network_file.clone(),
+            network_file: Rc::clone(&self.network_file),
             buffer: vec![0; length],
         })
     }

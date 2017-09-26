@@ -44,18 +44,17 @@ impl Smolnetd {
 
     pub fn new(network_file: File, ip_file: File, udp_file: File, time_file: File) -> Smolnetd {
         let arp_cache = smoltcp::iface::SliceArpCache::new(vec![Default::default(); 8]);
-        let hardware_addr = smoltcp::wire::EthernetAddress::from_str(
-            &getcfg("mac").unwrap().trim(),
-        ).expect("Can't parse the 'mac' cfg");
-        let local_ip = smoltcp::wire::IpAddress::from_str(&getcfg("ip").unwrap().trim())
+        let hardware_addr = smoltcp::wire::EthernetAddress::from_str(getcfg("mac").unwrap().trim())
+            .expect("Can't parse the 'mac' cfg");
+        let local_ip = smoltcp::wire::IpAddress::from_str(getcfg("ip").unwrap().trim())
             .expect("Can't parse the 'ip' cfg.");
         let protocol_addrs = [smoltcp::wire::IpCidr::new(local_ip, 24).unwrap()];
-        let default_gw = smoltcp::wire::IpAddress::from_str(&getcfg("ip_router").unwrap().trim())
+        let default_gw = smoltcp::wire::IpAddress::from_str(getcfg("ip_router").unwrap().trim())
             .expect("Can't parse the 'ip_router' cfg.");
         // trace!("mac {:?} ip {}", hardware_addr, protocol_addrs);
         let input_queue = Rc::new(RefCell::new(VecDeque::new()));
         let network_file = Rc::new(RefCell::new(network_file));
-        let network_device = NetworkDevice::new(network_file.clone(), input_queue.clone());
+        let network_device = NetworkDevice::new(Rc::clone(&network_file), Rc::clone(&input_queue));
         let iface = smoltcp::iface::EthernetInterface::new(
             Box::new(network_device),
             Box::new(arp_cache) as Box<smoltcp::iface::ArpCache>,
@@ -66,11 +65,11 @@ impl Smolnetd {
         let socket_set = Rc::new(RefCell::new(smoltcp::socket::SocketSet::new(vec![])));
         Smolnetd {
             iface,
-            socket_set: socket_set.clone(),
+            socket_set: Rc::clone(&socket_set),
             startup_time: Instant::now(),
             time_file,
-            ip_scheme: IpScheme::new(socket_set.clone(), ip_file),
-            udp_scheme: UdpScheme::new(socket_set.clone(), udp_file),
+            ip_scheme: IpScheme::new(Rc::clone(&socket_set), ip_file),
+            udp_scheme: UdpScheme::new(Rc::clone(&socket_set), udp_file),
             input_queue,
             network_file,
             input_buffer_pool: BufferPool::new(Self::INGRESS_PACKET_SIZE),
@@ -97,10 +96,10 @@ impl Smolnetd {
         if self.time_file.read(&mut time)? < mem::size_of::<syscall::data::TimeSpec>() {
             panic!();
         }
-        let mut time_ms = time.tv_sec * 1000i64 + (time.tv_nsec as i64) / 1_000_000i64;
+        let mut time_ms = time.tv_sec * 1000i64 + i64::from(time.tv_nsec) / 1_000_000i64;
         time_ms += Smolnetd::CHECK_TIMEOUT_MS;
         time.tv_sec = time_ms / 1000;
-        time.tv_nsec = ((time_ms % 1000) * 1_000_00) as i32;
+        time.tv_nsec = ((time_ms % 1000) * 1_000_000) as i32;
         self.time_file
             .write_all(&time)
             .map_err(|e| Error::from_io_error(e, "Failed to write to time file"))?;
@@ -140,8 +139,7 @@ impl Smolnetd {
 
     fn get_timestamp(&self) -> u64 {
         let duration = Instant::now().duration_since(self.startup_time);
-        let duration_ms = (duration.as_secs() * 1000) + (duration.subsec_nanos() / 1000000) as u64;
-        duration_ms
+        (duration.as_secs() * 1000) + u64::from(duration.subsec_nanos() / 1_000_000)
     }
 
     fn network_fsync(&mut self) -> syscall::Result<usize> {

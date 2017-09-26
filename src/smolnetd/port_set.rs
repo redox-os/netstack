@@ -35,7 +35,7 @@ impl PortSet {
             self.next = self.next.wrapping_add(1);
         };
 
-        return Some(port);
+        Some(port)
     }
 
     pub fn claim_port(&mut self, port: u16) -> bool {
