@@ -1,11 +1,15 @@
 use smoltcp::socket::{AsSocket, RawPacketBuffer, RawSocket, RawSocketBuffer, SocketHandle};
 use smoltcp::wire::{IpProtocol, IpVersion};
+use std::fs::File;
+use std::io::{Read, Write};
 use std::collections::BTreeMap;
+use syscall::SchemeMut;
 use syscall;
 
 use device::NetworkDevice;
 use error::Result;
 use super::{Smolnetd, SocketSet};
+use super::post_fevent;
 
 pub struct RawHandle {
     flags: usize,
@@ -17,23 +21,37 @@ pub struct IpScheme {
     next_ip_fd: usize,
     raw_sockets: BTreeMap<usize, RawHandle>,
     socket_set: SocketSet,
+    ip_file: File,
 }
 
 impl IpScheme {
-    pub fn new(socket_set: SocketSet) -> IpScheme {
+    pub fn new(socket_set: SocketSet, ip_file: File) -> IpScheme {
         IpScheme {
             next_ip_fd: 1,
             raw_sockets: BTreeMap::new(),
             socket_set,
+            ip_file,
         }
     }
 
-    pub fn notify_ready_sockets<F: FnMut(usize) -> Result<()>>(&self, mut f: F) -> Result<()> {
+    pub fn on_scheme_event(&mut self) -> Result<Option<()>> {
+        loop {
+            let mut packet = syscall::Packet::default();
+            if self.ip_file.read(&mut packet)? == 0 {
+                break;
+            }
+            self.handle(&mut packet);
+            self.ip_file.write_all(&packet)?;
+        }
+        Ok(None)
+    }
+
+    pub fn notify_sockets(&mut self) -> Result<()> {
         for (&fd, ref handle) in &self.raw_sockets {
             let mut socket_set = self.socket_set.borrow_mut();
             let socket: &mut RawSocket = socket_set.get_mut(handle.socket_handle).as_socket();
             if socket.can_send() {
-                f(fd)?
+                post_fevent(&mut self.ip_file, fd, syscall::EVENT_READ, 1)?;
             }
         }
         Ok(())

@@ -8,7 +8,6 @@ use std::mem;
 use std::rc::Rc;
 use std::str::FromStr;
 use std::time::Instant;
-use syscall::SchemeMut;
 use syscall;
 
 use buffer_pool::{Buffer, BufferPool};
@@ -24,8 +23,6 @@ type SocketSet = Rc<RefCell<smoltcp::socket::SocketSet<'static, 'static, 'static
 
 pub struct Smolnetd {
     network_file: Rc<RefCell<File>>,
-    ip_file: File,
-    udp_file: File,
     time_file: File,
 
     iface: smoltcp::iface::EthernetInterface<'static, 'static, 'static, NetworkDevice>,
@@ -71,11 +68,9 @@ impl Smolnetd {
             iface,
             socket_set: socket_set.clone(),
             startup_time: Instant::now(),
-            ip_file,
-            udp_file,
             time_file,
-            ip_scheme: IpScheme::new(socket_set.clone()),
-            udp_scheme: UdpScheme::new(socket_set.clone()),
+            ip_scheme: IpScheme::new(socket_set.clone(), ip_file),
+            udp_scheme: UdpScheme::new(socket_set.clone(), udp_file),
             input_queue,
             network_file,
             input_buffer_pool: BufferPool::new(Self::INGRESS_PACKET_SIZE),
@@ -90,27 +85,11 @@ impl Smolnetd {
     }
 
     pub fn on_ip_scheme_event(&mut self) -> Result<Option<()>> {
-        loop {
-            let mut packet = syscall::Packet::default();
-            if self.ip_file.read(&mut packet)? == 0 {
-                break;
-            }
-            self.ip_scheme.handle(&mut packet);
-            self.ip_file.write_all(&packet)?;
-        }
-        Ok(None)
+        self.ip_scheme.on_scheme_event()
     }
 
     pub fn on_udp_scheme_event(&mut self) -> Result<Option<()>> {
-        loop {
-            let mut packet = syscall::Packet::default();
-            if self.udp_file.read(&mut packet)? == 0 {
-                break;
-            }
-            self.udp_scheme.handle(&mut packet);
-            self.udp_file.write_all(&packet)?;
-        }
-        Ok(None)
+        self.udp_scheme.on_scheme_event()
     }
 
     pub fn on_time_event(&mut self) -> Result<Option<()>> {
@@ -171,12 +150,8 @@ impl Smolnetd {
     }
 
     fn notify_raw_sockets(&mut self) -> Result<()> {
-        let ip_file = &mut self.ip_file;
-        self.ip_scheme
-            .notify_ready_sockets(|fd| post_fevent(ip_file, fd, syscall::EVENT_READ, 1))?;
-        let udp_file = &mut self.udp_file;
-        self.udp_scheme
-            .notify_ready_sockets(|fd| post_fevent(udp_file, fd, syscall::EVENT_READ, 1))
+        self.ip_scheme.notify_sockets()?;
+        self.udp_scheme.notify_sockets()
     }
 }
 

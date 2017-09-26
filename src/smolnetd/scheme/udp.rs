@@ -1,14 +1,18 @@
 use smoltcp::socket::{AsSocket, SocketHandle, UdpPacketBuffer, UdpSocket, UdpSocketBuffer};
 use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::str::FromStr;
 use std::str;
+use syscall::SchemeMut;
 use syscall;
 
 use device::NetworkDevice;
 use error::Result;
 use super::{Smolnetd, SocketSet};
 use port_set::PortSet;
+use super::post_fevent;
 
 enum Setting {
     Ttl,
@@ -42,25 +46,40 @@ pub struct UdpScheme {
     udp_fds: BTreeMap<usize, FdHandle>,
     socket_set: SocketSet,
     port_set: PortSet,
+    udp_file: File,
 }
 
 impl UdpScheme {
-    pub fn new(socket_set: SocketSet) -> UdpScheme {
+    pub fn new(socket_set: SocketSet, udp_file: File) -> UdpScheme {
         UdpScheme {
             next_udp_fd: 1,
             udp_fds: BTreeMap::new(),
             socket_set,
-            port_set: PortSet::new(1025u16, 0xFFFFu16).expect("Wrong UDP port numbers"),
+            // 49152..65535 is the suggested range for dynamic private ports
+            port_set: PortSet::new(49152u16, 65535u16).expect("Wrong UDP port numbers"),
+            udp_file,
         }
     }
 
-    pub fn notify_ready_sockets<F: FnMut(usize) -> Result<()>>(&self, mut f: F) -> Result<()> {
+    pub fn on_scheme_event(&mut self) -> Result<Option<()>> {
+        loop {
+            let mut packet = syscall::Packet::default();
+            if self.udp_file.read(&mut packet)? == 0 {
+                break;
+            }
+            self.handle(&mut packet);
+            self.udp_file.write_all(&packet)?;
+        }
+        Ok(None)
+    }
+
+    pub fn notify_sockets(&mut self) -> Result<()> {
         for (&fd, handle) in &self.udp_fds {
             if let &FdHandle::Socket(UdpHandle { socket_handle, .. }) = handle {
                 let mut socket_set = self.socket_set.borrow_mut();
                 let socket: &mut UdpSocket = socket_set.get_mut(socket_handle).as_socket();
                 if socket.can_send() {
-                    f(fd)?
+                    post_fevent(&mut self.udp_file, fd, syscall::EVENT_READ, 1)?;
                 }
             }
         }
