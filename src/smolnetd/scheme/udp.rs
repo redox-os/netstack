@@ -13,7 +13,7 @@ use syscall::data::TimeSpec;
 use syscall;
 
 use device::NetworkDevice;
-use error::Result;
+use error::{Error, Result};
 use super::{Smolnetd, SocketSet};
 use port_set::PortSet;
 use super::post_fevent;
@@ -54,12 +54,19 @@ impl FdHandle {
     }
 }
 
+struct WaitHandle {
+    until: Option<TimeSpec>,
+    packet: syscall::Packet,
+}
+
 pub struct UdpScheme {
     next_udp_fd: usize,
     udp_fds: BTreeMap<usize, FdHandle>,
     socket_set: SocketSet,
     port_set: PortSet,
     udp_file: File,
+    read_wait_queue: BTreeMap<SocketHandle, Vec<WaitHandle>>,
+    write_wait_queue: BTreeMap<SocketHandle, Vec<WaitHandle>>,
 }
 
 impl UdpScheme {
@@ -71,6 +78,8 @@ impl UdpScheme {
             // 49152..65535 is the suggested range for dynamic private ports
             port_set: PortSet::new(49_152u16, 65_535u16).expect("Wrong UDP port numbers"),
             udp_file,
+            read_wait_queue: BTreeMap::new(),
+            write_wait_queue: BTreeMap::new(),
         }
     }
 
@@ -80,8 +89,14 @@ impl UdpScheme {
             if self.udp_file.read(&mut packet)? == 0 {
                 break;
             }
+            let a = packet.a;
             self.handle(&mut packet);
-            self.udp_file.write_all(&packet)?;
+            if packet.a != (-syscall::EWOULDBLOCK) as usize {
+                self.udp_file.write_all(&packet)?;
+            } else {
+                packet.a = a;
+                self.handle_block(packet)?;
+            }
         }
         Ok(None)
     }
@@ -96,6 +111,61 @@ impl UdpScheme {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn handle_block(&mut self, mut packet: syscall::Packet) -> Result<()> {
+        let syscall_result = self.try_handle_block(&mut packet);
+        if let Err(syscall_error) = syscall_result {
+            packet.a = (-syscall_error.errno) as usize;
+            self.udp_file.write_all(&packet)?;
+            Err(Error::from_syscall_error(
+                syscall_error,
+                "Can't handle blocked socket",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+
+    fn try_handle_block(&mut self, packet: &mut syscall::Packet) -> syscall::Result<()> {
+        let fd = packet.b;
+        let (socket_handle, read_timeout, write_timeout) = {
+            let handle = self.udp_fds
+                .get(&fd)
+                .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
+
+            if let FdHandle::Socket(ref udp_handle) = *handle {
+                Ok((
+                    udp_handle.socket_handle,
+                    udp_handle.read_timeout,
+                    udp_handle.write_timeout,
+                ))
+            } else {
+                Err(syscall::Error::new(syscall::EBADF))
+            }
+        }?;
+
+        let (mut timeout, queue) = match packet.a {
+            syscall::SYS_READ => Ok((read_timeout, &mut self.read_wait_queue)),
+            syscall::SYS_WRITE => Ok((write_timeout, &mut self.write_wait_queue)),
+            _ => Err(syscall::Error::new(syscall::EBADF)),
+        }?;
+
+        if let Some(ref mut timeout) = timeout {
+            let mut cur_time = TimeSpec::default();
+            syscall::clock_gettime(syscall::CLOCK_MONOTONIC, &mut cur_time)?;
+            *timeout = add_time(timeout, &cur_time)
+        }
+
+        queue
+            .entry(socket_handle)
+            .or_insert_with(|| vec![])
+            .push(WaitHandle {
+                until: timeout,
+                packet: *packet,
+            });
+
         Ok(())
     }
 
@@ -249,6 +319,8 @@ impl syscall::SchemeMut for UdpScheme {
             let socket: &mut UdpSocket = socket_set.get_mut(socket_handle).as_socket();
             socket.endpoint()
         };
+        self.write_wait_queue.remove(&socket_handle);
+        self.read_wait_queue.remove(&socket_handle);
         socket_set.release(socket_handle);
         //TODO: removing sockets in release should make prune unnecessary
         socket_set.prune();
@@ -428,4 +500,17 @@ fn parse_endpoint(socket: &str) -> IpEndpoint {
         .parse::<u16>()
         .unwrap_or(0);
     IpEndpoint::new(host, port)
+}
+
+fn add_time(a: &TimeSpec, b: &TimeSpec) -> TimeSpec {
+    let mut secs = a.tv_sec + b.tv_sec;
+    let mut nsecs = a.tv_nsec + b.tv_nsec;
+
+    secs += i64::from(nsecs) / 1_000_000_000;
+    nsecs %= 1_000_000_000;
+
+    TimeSpec {
+        tv_sec: secs,
+        tv_nsec: nsecs,
+    }
 }
