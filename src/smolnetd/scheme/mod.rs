@@ -15,10 +15,12 @@ use device::NetworkDevice;
 use error::{Error, Result};
 use self::ip::IpScheme;
 use self::udp_socket::UdpScheme;
+use self::tcp_socket::TcpScheme;
 
 mod ip;
 mod socket;
 mod udp_socket;
+mod tcp_socket;
 
 type SocketSet = Rc<RefCell<smoltcp::socket::SocketSet<'static, 'static, 'static>>>;
 
@@ -33,6 +35,7 @@ pub struct Smolnetd {
 
     ip_scheme: IpScheme,
     udp_scheme: UdpScheme,
+    tcp_scheme: TcpScheme,
 
     input_queue: Rc<RefCell<VecDeque<Buffer>>>,
     input_buffer_pool: BufferPool,
@@ -41,9 +44,15 @@ pub struct Smolnetd {
 impl Smolnetd {
     const INGRESS_PACKET_SIZE: usize = 2048;
     const SOCKET_BUFFER_SIZE: usize = 128; //packets
-    const CHECK_TIMEOUT_MS: i64 = 1000;
+    const CHECK_TIMEOUT_MS: i64 = 10;
 
-    pub fn new(network_file: File, ip_file: File, udp_file: File, time_file: File) -> Smolnetd {
+    pub fn new(
+        network_file: File,
+        ip_file: File,
+        udp_file: File,
+        tcp_file: File,
+        time_file: File,
+    ) -> Smolnetd {
         let arp_cache = smoltcp::iface::SliceArpCache::new(vec![Default::default(); 8]);
         let hardware_addr = smoltcp::wire::EthernetAddress::from_str(getcfg("mac").unwrap().trim())
             .expect("Can't parse the 'mac' cfg");
@@ -71,6 +80,7 @@ impl Smolnetd {
             time_file,
             ip_scheme: IpScheme::new(Rc::clone(&socket_set), ip_file),
             udp_scheme: UdpScheme::new(Rc::clone(&socket_set), udp_file),
+            tcp_scheme: TcpScheme::new(Rc::clone(&socket_set), tcp_file),
             input_queue,
             network_file,
             input_buffer_pool: BufferPool::new(Self::INGRESS_PACKET_SIZE),
@@ -92,6 +102,10 @@ impl Smolnetd {
         self.udp_scheme.on_scheme_event()
     }
 
+    pub fn on_tcp_scheme_event(&mut self) -> Result<Option<()>> {
+        self.tcp_scheme.on_scheme_event()
+    }
+
     pub fn on_time_event(&mut self) -> Result<Option<()>> {
         let mut time = syscall::data::TimeSpec::default();
         if self.time_file.read(&mut time)? < mem::size_of::<syscall::data::TimeSpec>() {
@@ -111,6 +125,7 @@ impl Smolnetd {
 
     fn poll(&mut self) -> Result<()> {
         let timestamp = self.get_timestamp();
+        // trace!("Poll {}", timestamp);
         self.iface
             .poll(&mut *self.socket_set.borrow_mut(), timestamp)
             .expect("poll error");
@@ -150,7 +165,8 @@ impl Smolnetd {
 
     fn notify_sockets(&mut self) -> Result<()> {
         self.ip_scheme.notify_sockets()?;
-        self.udp_scheme.notify_sockets()
+        self.udp_scheme.notify_sockets()?;
+        self.tcp_scheme.notify_sockets()
     }
 }
 
