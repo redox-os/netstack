@@ -14,10 +14,11 @@ use buffer_pool::{Buffer, BufferPool};
 use device::NetworkDevice;
 use error::{Error, Result};
 use self::ip::IpScheme;
-use self::udp::UdpScheme;
+use self::udp_socket::UdpScheme;
 
 mod ip;
-mod udp;
+mod socket;
+mod udp_socket;
 
 type SocketSet = Rc<RefCell<smoltcp::socket::SocketSet<'static, 'static, 'static>>>;
 
