@@ -113,7 +113,7 @@ impl Smolnetd {
         self.iface
             .poll(&mut *self.socket_set.borrow_mut(), timestamp)
             .expect("poll error");
-        self.notify_raw_sockets()
+        self.notify_sockets()
     }
 
     fn read_frames(&mut self) -> Result<usize> {
@@ -147,7 +147,7 @@ impl Smolnetd {
         syscall::fsync(self.network_file.borrow_mut().as_raw_fd() as usize)
     }
 
-    fn notify_raw_sockets(&mut self) -> Result<()> {
+    fn notify_sockets(&mut self) -> Result<()> {
         self.ip_scheme.notify_sockets()?;
         self.udp_scheme.notify_sockets()
     }

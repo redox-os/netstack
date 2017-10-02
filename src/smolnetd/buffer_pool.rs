@@ -48,7 +48,6 @@ impl Drop for Buffer {
         swap(&mut tmp, &mut self.buffer);
         {
             let mut stack = self.stack.borrow_mut();
-            trace!("Returning buffer: {}", stack.len());
             stack.push(tmp);
         }
     }
@@ -70,11 +69,9 @@ impl BufferPool {
     pub fn get_buffer(&mut self) -> Buffer {
         let buffer = match self.stack.borrow_mut().pop() {
             None => {
-                trace!("Allocating ingress buffer");
                 vec![0u8; self.buffers_size]
             }
             Some(mut v) => {
-                trace!("Reusing ingress buffer");
                 // memsetting the buffer with `resize` would be a waste of time
                 let capacity = v.capacity();
                 unsafe {

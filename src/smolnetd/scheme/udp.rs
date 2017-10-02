@@ -18,7 +18,7 @@ use super::{Smolnetd, SocketSet};
 use port_set::PortSet;
 use super::post_fevent;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum Setting {
     Ttl,
     ReadTimeout,
@@ -54,10 +54,19 @@ impl FdHandle {
     }
 }
 
+#[derive(Default, Clone)]
 struct WaitHandle {
     until: Option<TimeSpec>,
     packet: syscall::Packet,
 }
+
+#[derive(Default)]
+struct WaitQueues {
+    read_queue: Vec<WaitHandle>,
+    write_queue: Vec<WaitHandle>,
+}
+
+type WaitQueueMap = BTreeMap<SocketHandle, WaitQueues>;
 
 pub struct UdpScheme {
     next_udp_fd: usize,
@@ -65,8 +74,7 @@ pub struct UdpScheme {
     socket_set: SocketSet,
     port_set: PortSet,
     udp_file: File,
-    read_wait_queue: BTreeMap<SocketHandle, Vec<WaitHandle>>,
-    write_wait_queue: BTreeMap<SocketHandle, Vec<WaitHandle>>,
+    wait_queue_map: WaitQueueMap,
 }
 
 impl UdpScheme {
@@ -78,8 +86,7 @@ impl UdpScheme {
             // 49152..65535 is the suggested range for dynamic private ports
             port_set: PortSet::new(49_152u16, 65_535u16).expect("Wrong UDP port numbers"),
             udp_file,
-            read_wait_queue: BTreeMap::new(),
-            write_wait_queue: BTreeMap::new(),
+            wait_queue_map: BTreeMap::new(),
         }
     }
 
@@ -102,19 +109,109 @@ impl UdpScheme {
     }
 
     pub fn notify_sockets(&mut self) -> Result<()> {
+        // Notify non-blocking sockets
         for (&fd, handle) in &self.udp_fds {
-            if let FdHandle::Socket(UdpHandle { socket_handle, .. }) = *handle {
+            if let FdHandle::Socket(UdpHandle {
+                socket_handle,
+                events,
+                ..
+            }) = *handle
+            {
                 let mut socket_set = self.socket_set.borrow_mut();
                 let socket: &mut UdpSocket = socket_set.get_mut(socket_handle).as_socket();
-                if socket.can_send() {
+
+                if events & syscall::EVENT_READ == syscall::EVENT_READ && socket.can_recv() {
                     post_fevent(&mut self.udp_file, fd, syscall::EVENT_READ, 1)?;
                 }
+
+                if events & syscall::EVENT_WRITE == syscall::EVENT_WRITE && socket.can_send() {
+                    post_fevent(&mut self.udp_file, fd, syscall::EVENT_WRITE, 1)?;
+                }
+            }
+        }
+
+        // Wake up blocking queue
+        self.wake_up_queues()?;
+
+        Ok(())
+    }
+
+    fn wake_up_queues(&mut self) -> Result<()> {
+        let mut cur_time = TimeSpec::default();
+        syscall::clock_gettime(syscall::CLOCK_MONOTONIC, &mut cur_time)
+            .map_err(|e| Error::from_syscall_error(e, "Can't get time"))?;
+
+        let socket_handles: Vec<_> = self.wait_queue_map.keys().cloned().collect();
+
+        for socket_handle in socket_handles {
+            let (can_recv, can_send) = {
+                let mut socket_set = self.socket_set.borrow_mut();
+                let socket: &mut UdpSocket = socket_set.get_mut(socket_handle).as_socket();
+                (socket.can_recv(), socket.can_send())
+            };
+
+            if can_recv {
+                self.wake_up_wait_queue(socket_handle, cur_time, |wq| &mut wq.read_queue)?;
+            }
+
+            if can_send {
+                self.wake_up_wait_queue(socket_handle, cur_time, |wq| &mut wq.write_queue)?;
             }
         }
         Ok(())
     }
 
+    fn wake_up_wait_queue<F>(
+        &mut self,
+        socket_handle: SocketHandle,
+        cur_time: syscall::TimeSpec,
+        f: F,
+    ) -> Result<()>
+    where
+        F: Fn(&mut WaitQueues) -> &mut Vec<WaitHandle>,
+    {
+        let mut input_queue = if let Some(wait_queues) = self.wait_queue_map.get_mut(&socket_handle)
+        {
+            ::std::mem::replace(f(wait_queues), vec![])
+        } else {
+            vec![]
+        };
+
+        let mut to_retain = vec![];
+
+        for wait_handle in input_queue.drain(..) {
+            let mut packet = wait_handle.packet;
+            self.handle(&mut packet);
+            if packet.a == (-syscall::EWOULDBLOCK) as usize {
+                match wait_handle.until {
+                    Some(until)
+                        if (until.tv_sec >= cur_time.tv_sec
+                            || (until.tv_sec == cur_time.tv_sec
+                                && until.tv_nsec >= cur_time.tv_nsec)) =>
+                    {
+                        trace!("Timeouting fd {}", packet.b);
+                        packet.a = (-syscall::ETIMEDOUT) as usize;
+                        self.udp_file.write_all(&packet)?;
+                    }
+                    _ => {
+                        to_retain.push(wait_handle);
+                    }
+                }
+            } else {
+                trace!("Waking up fd {}", packet.b);
+                self.udp_file.write_all(&packet)?;
+            }
+        }
+
+        if let Some(wait_queues) = self.wait_queue_map.get_mut(&socket_handle) {
+            f(wait_queues).extend(to_retain);
+        }
+
+        Ok(())
+    }
+
     fn handle_block(&mut self, mut packet: syscall::Packet) -> Result<()> {
+        trace!("Handling blocking call");
         let syscall_result = self.try_handle_block(&mut packet);
         if let Err(syscall_error) = syscall_result {
             packet.a = (-syscall_error.errno) as usize;
@@ -146,9 +243,9 @@ impl UdpScheme {
             }
         }?;
 
-        let (mut timeout, queue) = match packet.a {
-            syscall::SYS_READ => Ok((read_timeout, &mut self.read_wait_queue)),
-            syscall::SYS_WRITE => Ok((write_timeout, &mut self.write_wait_queue)),
+        let mut timeout = match packet.a {
+            syscall::SYS_READ => Ok(read_timeout),
+            syscall::SYS_WRITE => Ok(write_timeout),
             _ => Err(syscall::Error::new(syscall::EBADF)),
         }?;
 
@@ -158,13 +255,21 @@ impl UdpScheme {
             *timeout = add_time(timeout, &cur_time)
         }
 
-        queue
+        trace!("Adding {} to wait queie", fd);
+        let wait_queues = self.wait_queue_map
             .entry(socket_handle)
-            .or_insert_with(|| vec![])
-            .push(WaitHandle {
-                until: timeout,
-                packet: *packet,
-            });
+            .or_insert_with(|| WaitQueues::default());
+
+        let queue = match packet.a {
+            syscall::SYS_READ => Ok(&mut wait_queues.read_queue),
+            syscall::SYS_WRITE => Ok(&mut wait_queues.write_queue),
+            _ => Err(syscall::Error::new(syscall::EBADF)),
+        }?;
+
+        queue.push(WaitHandle {
+            until: timeout,
+            packet: *packet,
+        });
 
         Ok(())
     }
@@ -192,6 +297,8 @@ impl UdpScheme {
             }
         };
 
+        trace!("Getting {:?} from {}", setting, fd);
+
         if buf.len() < mem::size_of::<TimeSpec>() {
             Ok(0)
         } else {
@@ -217,6 +324,7 @@ impl UdpScheme {
                 return Err(syscall::Error::new(syscall::EBADF));
             }
         };
+        trace!("Setting {:?} to {}", setting, fd);
         match setting {
             Setting::ReadTimeout | Setting::WriteTimeout => {
                 let (timeout, count) = {
@@ -319,8 +427,27 @@ impl syscall::SchemeMut for UdpScheme {
             let socket: &mut UdpSocket = socket_set.get_mut(socket_handle).as_socket();
             socket.endpoint()
         };
-        self.write_wait_queue.remove(&socket_handle);
-        self.read_wait_queue.remove(&socket_handle);
+        let remove = if let Some(ref mut wait_queues) = self.wait_queue_map.get_mut(&socket_handle)
+        {
+            wait_queues.read_queue.retain(
+                |&WaitHandle {
+                     packet: syscall::Packet { a, .. },
+                     ..
+                 }| a != fd,
+            );
+            wait_queues.write_queue.retain(
+                |&WaitHandle {
+                     packet: syscall::Packet { a, .. },
+                     ..
+                 }| a != fd,
+            );
+            wait_queues.read_queue.is_empty() && wait_queues.write_queue.is_empty()
+        } else {
+            false
+        };
+        if remove {
+            self.wait_queue_map.remove(&socket_handle);
+        }
         socket_set.release(socket_handle);
         //TODO: removing sockets in release should make prune unnecessary
         socket_set.prune();
@@ -349,10 +476,16 @@ impl syscall::SchemeMut for UdpScheme {
                     let mut socket_set = self.socket_set.borrow_mut();
                     let socket: &mut UdpSocket =
                         socket_set.get_mut(handle.socket_handle).as_socket();
-                    socket
-                        .send_slice(buf, handle.remote_endpoint)
-                        .expect("Can't send slice");
-                    return Ok(buf.len());
+                    return if socket.can_send() {
+                        socket
+                            .send_slice(buf, handle.remote_endpoint)
+                            .expect("Can't send slice");
+                        Ok(buf.len())
+                    } else if handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
+                        Ok(0)
+                    } else {
+                        Err(syscall::Error::new(syscall::EWOULDBLOCK))
+                    };
                 }
             }
         };
