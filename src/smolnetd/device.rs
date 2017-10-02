@@ -53,10 +53,10 @@ impl smoltcp::phy::Device for NetworkDevice {
     type RxBuffer = Buffer;
     type TxBuffer = TxBuffer;
 
-    fn limits(&self) -> smoltcp::phy::DeviceLimits {
-        let mut limits = smoltcp::phy::DeviceLimits::default();
+    fn capabilities(&self) -> smoltcp::phy::DeviceCapabilities {
+        let mut limits = smoltcp::phy::DeviceCapabilities::default();
         limits.max_transmission_unit = Self::MTU;
-        limits.max_burst_size = Some(1);
+        limits.max_burst_size = Some(5);
         limits
     }
 
