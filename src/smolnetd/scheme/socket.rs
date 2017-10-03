@@ -320,7 +320,7 @@ where
         trace!("Adding {} to wait queie", fd);
         let wait_queues = self.wait_queue_map
             .entry(socket_handle)
-            .or_insert_with(|| WaitQueues::default());
+            .or_insert_with(WaitQueues::default);
 
         let queue = match packet.a {
             syscall::SYS_READ => Ok(&mut wait_queues.read_queue),

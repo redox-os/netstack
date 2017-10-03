@@ -14,13 +14,13 @@ use buffer_pool::{Buffer, BufferPool};
 use device::NetworkDevice;
 use error::{Error, Result};
 use self::ip::IpScheme;
-use self::udp_socket::UdpScheme;
-use self::tcp_socket::TcpScheme;
+use self::udp::UdpScheme;
+use self::tcp::TcpScheme;
 
 mod ip;
 mod socket;
-mod udp_socket;
-mod tcp_socket;
+mod udp;
+mod tcp;
 
 type SocketSet = Rc<RefCell<smoltcp::socket::SocketSet<'static, 'static, 'static>>>;
 
@@ -44,7 +44,8 @@ pub struct Smolnetd {
 impl Smolnetd {
     const INGRESS_PACKET_SIZE: usize = 2048;
     const SOCKET_BUFFER_SIZE: usize = 128; //packets
-    const CHECK_TIMEOUT_MS: i64 = 10;
+    const MIN_CHECK_TIMEOUT_MS: i64 = 10;
+    const MAX_CHECK_TIMEOUT_MS: i64 = 500;
 
     pub fn new(
         network_file: File,
@@ -95,41 +96,76 @@ impl Smolnetd {
     }
 
     pub fn on_ip_scheme_event(&mut self) -> Result<Option<()>> {
-        self.ip_scheme.on_scheme_event()
+        self.ip_scheme.on_scheme_event()?;
+        self.poll()?;
+        Ok(None)
     }
 
     pub fn on_udp_scheme_event(&mut self) -> Result<Option<()>> {
-        self.udp_scheme.on_scheme_event()
+        self.udp_scheme.on_scheme_event()?;
+        self.poll()?;
+        Ok(None)
     }
 
     pub fn on_tcp_scheme_event(&mut self) -> Result<Option<()>> {
-        self.tcp_scheme.on_scheme_event()
+        self.tcp_scheme.on_scheme_event()?;
+        self.poll()?;
+        Ok(None)
     }
 
     pub fn on_time_event(&mut self) -> Result<Option<()>> {
+        let timeout = self.poll()?;
+        self.schedule_timeout(timeout)?;
+        Ok(None)
+    }
+
+    fn schedule_timeout(&mut self, timeout: i64) -> Result<()> {
         let mut time = syscall::data::TimeSpec::default();
         if self.time_file.read(&mut time)? < mem::size_of::<syscall::data::TimeSpec>() {
-            panic!();
+            return Err(Error::from_syscall_error(
+                syscall::Error::new(syscall::EBADF),
+                "Can't read current time",
+            ));
         }
         let mut time_ms = time.tv_sec * 1000i64 + i64::from(time.tv_nsec) / 1_000_000i64;
-        time_ms += Smolnetd::CHECK_TIMEOUT_MS;
+        time_ms += timeout;
         time.tv_sec = time_ms / 1000;
         time.tv_nsec = ((time_ms % 1000) * 1_000_000) as i32;
         self.time_file
             .write_all(&time)
             .map_err(|e| Error::from_io_error(e, "Failed to write to time file"))?;
-
-        self.poll().map(Some)?;
-        Ok(None)
+        Ok(())
     }
 
-    fn poll(&mut self) -> Result<()> {
-        let timestamp = self.get_timestamp();
-        // trace!("Poll {}", timestamp);
-        if let Err(err) = self.iface.poll(&mut *self.socket_set.borrow_mut(), timestamp) {
-            error!("poll error: {}", err);
-        }
-        self.notify_sockets()
+    fn poll(&mut self) -> Result<i64> {
+        let mut iter_limit = 10usize;
+        let timeout = loop {
+            iter_limit -= 1;
+            if iter_limit == 0 {
+                break 0;
+            }
+            let timestamp = self.get_timestamp();
+            match self.iface
+                .poll(&mut *self.socket_set.borrow_mut(), timestamp)
+            {
+                Err(err) => {
+                    error!("poll error: {}", err);
+                    break 0;
+                }
+                Ok(None) => {
+                    break ::std::u64::MAX;
+                }
+                Ok(Some(n)) if n > 0 => {
+                    break n;
+                }
+                _ => {}
+            }
+        };
+        self.notify_sockets()?;
+        Ok(::std::cmp::min(
+            ::std::cmp::max(Smolnetd::MIN_CHECK_TIMEOUT_MS, timeout as i64),
+            Smolnetd::MAX_CHECK_TIMEOUT_MS,
+        ))
     }
 
     fn read_frames(&mut self) -> Result<usize> {
@@ -156,11 +192,6 @@ impl Smolnetd {
     fn get_timestamp(&self) -> u64 {
         let duration = Instant::now().duration_since(self.startup_time);
         (duration.as_secs() * 1000) + u64::from(duration.subsec_nanos() / 1_000_000)
-    }
-
-    fn network_fsync(&mut self) -> syscall::Result<usize> {
-        use std::os::unix::io::AsRawFd;
-        syscall::fsync(self.network_file.borrow_mut().as_raw_fd() as usize)
     }
 
     fn notify_sockets(&mut self) -> Result<()> {

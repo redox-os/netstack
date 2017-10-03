@@ -112,8 +112,8 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             return Err(syscall::Error::new(syscall::EACCES));
         }
 
-        let rx_packets = vec![0; 65535];
-        let tx_packets = vec![0; 65535];
+        let rx_packets = vec![0; 65_535];
+        let tx_packets = vec![0; 65_535];
         let rx_buffer = TcpSocketBuffer::new(rx_packets);
         let tx_buffer = TcpSocketBuffer::new(tx_packets);
         let mut tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
@@ -142,7 +142,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         file: &SchemeFile<Self>,
         port_set: &mut Self::SchemeDataT,
     ) -> syscall::Result<()> {
-        if let &SchemeFile::Socket(_) = file {
+        if let SchemeFile::Socket(_) = *file {
             port_set.release_port(self.local_endpoint().port);
         }
         Ok(())
@@ -156,14 +156,14 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         if !self.is_open() {
             return Err(syscall::Error::new(syscall::EADDRNOTAVAIL));
         }
-        return if self.can_send() {
+        if self.can_send() {
             self.send_slice(buf).expect("Can't send slice");
             Ok(buf.len())
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Ok(0)
         } else {
             Err(syscall::Error::new(syscall::EWOULDBLOCK))
-        };
+        }
     }
 
     fn read_buf(
@@ -171,14 +171,14 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
     ) -> syscall::Result<usize> {
-        return if self.can_recv() {
+        if self.can_recv() {
             let length = self.recv_slice(buf).expect("Can't receive slice");
             Ok(length)
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Ok(0)
         } else {
             Err(syscall::Error::new(syscall::EWOULDBLOCK))
-        };
+        }
     }
 
     fn dup(
