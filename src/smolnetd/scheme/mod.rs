@@ -58,8 +58,8 @@ impl Smolnetd {
             .expect("Can't parse the 'mac' cfg");
         let local_ip = smoltcp::wire::IpAddress::from_str(getcfg("ip").unwrap().trim())
             .expect("Can't parse the 'ip' cfg.");
-        let protocol_addrs = [smoltcp::wire::IpCidr::new(local_ip, 24).unwrap()];
-        let default_gw = smoltcp::wire::IpAddress::from_str(getcfg("ip_router").unwrap().trim())
+        let protocol_addrs = [smoltcp::wire::IpCidr::new(local_ip, 24)];
+        let default_gw = smoltcp::wire::Ipv4Address::from_str(getcfg("ip_router").unwrap().trim())
             .expect("Can't parse the 'ip_router' cfg.");
         // trace!("mac {:?} ip {}", hardware_addr, protocol_addrs);
         let input_queue = Rc::new(RefCell::new(VecDeque::new()));
@@ -70,7 +70,7 @@ impl Smolnetd {
             Box::new(arp_cache) as Box<smoltcp::iface::ArpCache>,
             hardware_addr,
             protocol_addrs,
-            default_gw,
+            Some(default_gw),
         );
         let socket_set = Rc::new(RefCell::new(smoltcp::socket::SocketSet::new(vec![])));
         Smolnetd {
