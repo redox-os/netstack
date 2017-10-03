@@ -107,7 +107,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
         let mut local_endpoint = parse_endpoint(parts.next().unwrap_or(""));
 
-        if local_endpoint.port <= 1024 && uid != 0 {
+        if local_endpoint.port > 0 && local_endpoint.port <= 1024 && uid != 0 {
             return Err(syscall::Error::new(syscall::EACCES));
         }
 

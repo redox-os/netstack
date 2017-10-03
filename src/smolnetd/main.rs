@@ -25,12 +25,6 @@ mod port_set;
 fn run() -> Result<()> {
     use syscall::flag::*;
 
-    logger::init_logger();
-
-    // if unsafe { syscall::clone(0).unwrap() } != 0 {
-    //     return Ok(());
-    // }
-
     trace!("opening network:");
     let network_fd = syscall::open("network:", O_RDWR | O_NONBLOCK)
         .map_err(|e| Error::from_syscall_error(e, "failed to open network:"))?
@@ -126,9 +120,12 @@ fn run() -> Result<()> {
 }
 
 fn main() {
-    if let Err(err) = run() {
-        error!("smoltcpd: {}", err);
-        process::exit(1);
+    if unsafe { syscall::clone(0).unwrap() } == 0 {
+        logger::init_logger();
+
+        if let Err(err) = run() {
+            error!("smoltcpd: {}", err);
+            process::exit(1);
+        }
     }
-    process::exit(0);
 }

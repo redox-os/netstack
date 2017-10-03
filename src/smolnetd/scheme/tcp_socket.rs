@@ -11,7 +11,6 @@ use std::ops::DerefMut;
 use syscall::data::TimeSpec;
 use syscall;
 
-use super::Smolnetd;
 use port_set::PortSet;
 
 pub type TcpScheme = SocketScheme<TcpSocket<'static>>;
@@ -109,7 +108,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
         let mut local_endpoint = parse_endpoint(parts.next().unwrap_or(""));
 
-        if local_endpoint.port <= 1024 && uid != 0 {
+        if local_endpoint.port > 0 && local_endpoint.port <= 1024 && uid != 0 {
             return Err(syscall::Error::new(syscall::EACCES));
         }
 

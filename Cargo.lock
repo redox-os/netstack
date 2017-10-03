@@ -7,7 +7,7 @@ dependencies = [
  "rand 0.3.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_event 0.1.0 (git+https://github.com/redox-os/event.git)",
  "redox_syscall 0.1.31 (registry+https://github.com/rust-lang/crates.io-index)",
- "smoltcp 0.4.0",
+ "smoltcp 0.4.0 (git+https://github.com/batonius/smoltcp.git?branch=default_route)",
 ]
 
 [[package]]
@@ -328,6 +328,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "smoltcp"
 version = "0.4.0"
+source = "git+https://github.com/batonius/smoltcp.git?branch=default_route#253a14b425fa77ddfe096352cf3d8d6a9dbcafbc"
 dependencies = [
  "byteorder 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -477,6 +478,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum rustls 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "17727f4b991294da2c84d75a43c003151ff58072212768800f66c56ee46dca43"
 "checksum safemem 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e27a8b19b835f7aea908818e871f5cc3a5a186550c30773be987e155e8163d8f"
 "checksum scopeguard 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)" = "c79eb2c3ac4bc2507cda80e7f3ac5b88bd8eae4c0914d5663e6a8933994be918"
+"checksum smoltcp 0.4.0 (git+https://github.com/batonius/smoltcp.git?branch=default_route)" = "<none>"
 "checksum termion 1.5.1 (registry+https://github.com/rust-lang/crates.io-index)" = "689a3bdfaab439fd92bc87df5c4c78417d3cbe537487274e9b0b2dce76e92096"
 "checksum time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)" = "d5d788d3aa77bc0ef3e9621256885555368b47bd495c13dd2e7413c89f845520"
 "checksum traitobject 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "efd1f82c56340fdf16f2a953d7bda4f8fdffba13d93b00844c25572110b26079"

@@ -126,9 +126,9 @@ impl Smolnetd {
     fn poll(&mut self) -> Result<()> {
         let timestamp = self.get_timestamp();
         // trace!("Poll {}", timestamp);
-        self.iface
-            .poll(&mut *self.socket_set.borrow_mut(), timestamp)
-            .expect("poll error");
+        if let Err(err) = self.iface.poll(&mut *self.socket_set.borrow_mut(), timestamp) {
+            error!("poll error: {}", err);
+        }
         self.notify_sockets()
     }
 

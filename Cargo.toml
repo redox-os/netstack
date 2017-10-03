@@ -41,4 +41,4 @@ features = ["release_max_level_off"]
 git = "https://github.com/batonius/smoltcp.git"
 branch = "default_route"
 default-features = false
-features = ["std", "log", "socket-raw", "socket-udp", "socket-tcp"] 
+features = ["std", "log", "socket-raw", "socket-udp", "socket-tcp"]
