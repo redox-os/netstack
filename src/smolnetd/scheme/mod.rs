@@ -181,7 +181,6 @@ impl Smolnetd {
             if count == 0 {
                 break;
             }
-            trace!("got frame {}", count);
             buffer.resize(count);
             self.input_queue.borrow_mut().push_back(buffer);
             total_frames += 1;

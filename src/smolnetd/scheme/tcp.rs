@@ -116,7 +116,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         let tx_packets = vec![0; 65_535];
         let rx_buffer = TcpSocketBuffer::new(rx_packets);
         let tx_buffer = TcpSocketBuffer::new(tx_packets);
-        let mut tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
+        let mut socket = TcpSocket::new(rx_buffer, tx_buffer);
 
         if local_endpoint.port == 0 {
             local_endpoint.port = port_set
@@ -127,14 +127,22 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         }
 
         {
-            let tcp_socket: &mut TcpSocket = tcp_socket.as_socket();
-            trace!("Connecting tcp {} {}", local_endpoint, remote_endpoint);
-            tcp_socket
-                .connect(remote_endpoint, local_endpoint)
-                .expect("Can't connect tcp socket ");
+            let tcp_socket: &mut TcpSocket = socket.as_socket();
+
+            if remote_endpoint.is_specified() {
+                trace!("Connecting tcp {} {}", local_endpoint, remote_endpoint);
+                tcp_socket
+                    .connect(remote_endpoint, local_endpoint)
+                    .expect("Can't connect tcp socket ");
+            } else {
+                trace!("Listening tcp {}", local_endpoint);
+                tcp_socket
+                    .listen(local_endpoint)
+                    .expect("Can't listen on local endpoint");
+            }
         }
 
-        Ok((tcp_socket, ()))
+        Ok((socket, ()))
     }
 
     fn close_file(
@@ -153,10 +161,9 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         file: &mut SocketFile<Self::DataT>,
         buf: &[u8],
     ) -> syscall::Result<usize> {
-        if !self.is_open() {
-            return Err(syscall::Error::new(syscall::EADDRNOTAVAIL));
-        }
-        if self.can_send() {
+        if !self.is_active() {
+            Err(syscall::Error::new(syscall::ENOTCONN))
+        } else if self.can_send() {
             self.send_slice(buf).expect("Can't send slice");
             Ok(buf.len())
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
@@ -171,7 +178,9 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
     ) -> syscall::Result<usize> {
-        if self.can_recv() {
+        if !self.is_active() {
+            Err(syscall::Error::new(syscall::ENOTCONN))
+        } else if self.can_recv() {
             let length = self.recv_slice(buf).expect("Can't receive slice");
             Ok(length)
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
@@ -188,8 +197,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         socket_handle: SocketHandle,
         path: &str,
         port_set: &mut Self::SchemeDataT,
-    ) -> syscall::Result<SchemeFile<Self>> {
-        trace!("TCP dup {}", path);
+    ) -> syscall::Result<DupResult<Self>> {
         let handle = match path {
             "ttl" => SchemeFile::Setting(SettingFile {
                 socket_handle,
@@ -206,18 +214,57 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                 fd,
                 setting: Setting::WriteTimeout,
             }),
-            _ => if let SchemeFile::Socket(ref tcp_handle) = *file {
-                SchemeFile::Socket(tcp_handle.clone_with_data(()))
+            "listen" => if let SchemeFile::Socket(ref tcp_handle) = *file {
+                if !self.is_active() {
+                    return Err(syscall::Error::new(syscall::EWOULDBLOCK));
+                }
+                trace!("TCP creating new listening socket");
+                let new_handle = SchemeFile::Socket(tcp_handle.clone_with_data(()));
+
+                let rx_packets = vec![0; 65_535];
+                let tx_packets = vec![0; 65_535];
+                let rx_buffer = TcpSocketBuffer::new(rx_packets);
+                let tx_buffer = TcpSocketBuffer::new(tx_packets);
+                let mut socket = TcpSocket::new(rx_buffer, tx_buffer);
+                {
+                    let tcp_socket: &mut TcpSocket = socket.as_socket();
+                    tcp_socket
+                        .listen(self.local_endpoint())
+                        .expect("Can't listen on local endpoint");
+                }
+                port_set.acquire_port(self.local_endpoint().port);
+                return Ok((new_handle, Some((socket, ()))));
             } else {
-                SchemeFile::Socket(SocketFile::new_with_data(socket_handle, ()))
+                return Err(syscall::Error::new(syscall::EBADF));
             },
+            _ => {
+                trace!("TCP dup unknown {}", path);
+                if let SchemeFile::Socket(ref tcp_handle) = *file {
+                    SchemeFile::Socket(tcp_handle.clone_with_data(()))
+                } else {
+                    SchemeFile::Socket(SocketFile::new_with_data(socket_handle, ()))
+                }
+            }
         };
 
         if let SchemeFile::Socket(_) = handle {
             port_set.acquire_port(self.local_endpoint().port);
         }
 
-        Ok(handle)
+        Ok((handle, None))
+    }
+
+    fn fpath(&self, _: &SchemeFile<Self>, buf: &mut [u8]) -> syscall::Result<usize> {
+        let path = format!("tcp:{}/{}", self.remote_endpoint(), self.local_endpoint());
+        let path = path.as_bytes();
+
+        let mut i = 0;
+        while i < buf.len() && i < path.len() {
+            buf[i] = path[i];
+            i += 1;
+        }
+
+        Ok(i)
     }
 }
 

@@ -161,19 +161,38 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
         socket_handle: SocketHandle,
         path: &str,
         _: &mut Self::SchemeDataT,
-    ) -> syscall::Result<SchemeFile<Self>> {
+    ) -> syscall::Result<DupResult<Self>> {
         match path {
-            "write_timeout" => Ok(SchemeFile::Setting(SettingFile {
-                socket_handle,
-                fd,
-                setting: Setting::WriteTimeout,
-            })),
-            "read_timeout" => Ok(SchemeFile::Setting(SettingFile {
-                socket_handle,
-                fd,
-                setting: Setting::ReadTimeout,
-            })),
+            "write_timeout" => Ok((
+                SchemeFile::Setting(SettingFile {
+                    socket_handle,
+                    fd,
+                    setting: Setting::WriteTimeout,
+                }),
+                None,
+            )),
+            "read_timeout" => Ok((
+                SchemeFile::Setting(SettingFile {
+                    socket_handle,
+                    fd,
+                    setting: Setting::ReadTimeout,
+                }),
+                None,
+            )),
             _ => Err(syscall::Error::new(syscall::EBADF)),
         }
+    }
+
+    fn fpath(&self, _file: &SchemeFile<Self>, buf: &mut [u8]) -> syscall::Result<usize> {
+        let path = format!("ip:{}", self.ip_protocol());
+        let path = path.as_bytes();
+
+        let mut i = 0;
+        while i < buf.len() && i < path.len() {
+            buf[i] = path[i];
+            i += 1;
+        }
+
+        Ok(i)
     }
 }

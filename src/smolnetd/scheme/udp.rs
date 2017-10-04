@@ -82,6 +82,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
                         (Some(timespec), count)
                     }
                 };
+                trace!("Setting {:?} to {:?}", setting, timeout);
                 match setting {
                     Setting::ReadTimeout => {
                         file.read_timeout = timeout;
@@ -190,7 +191,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
         socket_handle: SocketHandle,
         path: &str,
         port_set: &mut Self::SchemeDataT,
-    ) -> syscall::Result<SchemeFile<Self>> {
+    ) -> syscall::Result<DupResult<Self>> {
         let handle = match path {
             "ttl" => SchemeFile::Setting(SettingFile {
                 socket_handle,
@@ -227,7 +228,24 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             port_set.acquire_port(self.endpoint().port);
         }
 
-        Ok(handle)
+        Ok((handle, None))
+    }
+
+    fn fpath(&self, file: &SchemeFile<Self>, buf: &mut [u8]) -> syscall::Result<usize> {
+        if let &SchemeFile::Socket(ref socket_file) = file {
+            let path = format!("udp:{}/{}", socket_file.data, self.endpoint());
+            let path = path.as_bytes();
+
+            let mut i = 0;
+            while i < buf.len() && i < path.len() {
+                buf[i] = path[i];
+                i += 1;
+            }
+
+            Ok(i)
+        } else {
+            Err(syscall::Error::new(syscall::EBADF))
+        }
     }
 }
 
