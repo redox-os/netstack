@@ -328,7 +328,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "smoltcp"
 version = "0.4.0"
-source = "git+https://github.com/m-labs/smoltcp.git#d88ef3c8d3c8ab59ba4381cd60ee6e69e4138fcd"
+source = "git+https://github.com/m-labs/smoltcp.git#b0fc1d9542ef3b8e7add3b90dcf2d6f1fc4c633e"
 dependencies = [
  "byteorder 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
