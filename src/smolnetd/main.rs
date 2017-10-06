@@ -21,8 +21,8 @@ mod buffer_pool;
 mod device;
 mod error;
 mod logger;
-mod scheme;
 mod port_set;
+mod scheme;
 
 fn run() -> Result<()> {
     use syscall::flag::*;
