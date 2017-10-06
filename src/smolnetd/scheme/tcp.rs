@@ -1,7 +1,8 @@
 use super::socket::*;
 
-use smoltcp::socket::{AsSocket, Socket, SocketHandle, TcpSocket, TcpSocketBuffer};
+use smoltcp::socket::{SocketHandle, TcpSocket, TcpSocketBuffer};
 use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
+use smoltcp;
 use std::io::{Read, Write};
 use std::str::FromStr;
 use std::str;
@@ -99,10 +100,11 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
     }
 
     fn new_socket(
+        socket_set: &mut smoltcp::socket::SocketSet<'static, 'static, 'static>,
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
-    ) -> syscall::Result<(Socket<'static, 'static>, Self::DataT)> {
+    ) -> syscall::Result<(SocketHandle, Self::DataT)> {
         trace!("TCP open {}", path);
         let mut parts = path.split('/');
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
@@ -116,7 +118,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         let tx_packets = vec![0; 65_535];
         let rx_buffer = TcpSocketBuffer::new(rx_packets);
         let tx_buffer = TcpSocketBuffer::new(tx_packets);
-        let mut socket = TcpSocket::new(rx_buffer, tx_buffer);
+        let socket = TcpSocket::new(rx_buffer, tx_buffer);
 
         if local_endpoint.port == 0 {
             local_endpoint.port = port_set
@@ -126,23 +128,23 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             return Err(syscall::Error::new(syscall::EADDRINUSE));
         }
 
-        {
-            let tcp_socket: &mut TcpSocket = socket.as_socket();
+        let socket_handle = socket_set.add(socket);
 
-            if remote_endpoint.is_specified() {
-                trace!("Connecting tcp {} {}", local_endpoint, remote_endpoint);
-                tcp_socket
-                    .connect(remote_endpoint, local_endpoint)
-                    .expect("Can't connect tcp socket ");
-            } else {
-                trace!("Listening tcp {}", local_endpoint);
-                tcp_socket
-                    .listen(local_endpoint)
-                    .expect("Can't listen on local endpoint");
-            }
+        let mut tcp_socket = socket_set.get::<TcpSocket>(socket_handle);
+
+        if remote_endpoint.is_specified() {
+            trace!("Connecting tcp {} {}", local_endpoint, remote_endpoint);
+            tcp_socket
+                .connect(remote_endpoint, local_endpoint)
+                .expect("Can't connect tcp socket ");
+        } else {
+            trace!("Listening tcp {}", local_endpoint);
+            tcp_socket
+                .listen(local_endpoint)
+                .expect("Can't listen on local endpoint");
         }
 
-        Ok((socket, ()))
+        Ok((socket_handle, ()))
     }
 
     fn close_file(
@@ -191,13 +193,18 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
     }
 
     fn dup(
-        &self,
+        socket_set: &mut smoltcp::socket::SocketSet<'static, 'static, 'static>,
+        socket_handle: SocketHandle,
         file: &mut SchemeFile<Self>,
         fd: usize,
-        socket_handle: SocketHandle,
         path: &str,
         port_set: &mut Self::SchemeDataT,
     ) -> syscall::Result<DupResult<Self>> {
+        let (is_active, local_endpoint) = {
+            let socket = socket_set.get::<TcpSocket>(socket_handle);
+            (socket.is_active(), socket.local_endpoint())
+        };
+
         let handle = match path {
             "ttl" => SchemeFile::Setting(SettingFile {
                 socket_handle,
@@ -215,7 +222,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                 setting: Setting::WriteTimeout,
             }),
             "listen" => if let SchemeFile::Socket(ref tcp_handle) = *file {
-                if !self.is_active() {
+                if !is_active {
                     return Err(syscall::Error::new(syscall::EWOULDBLOCK));
                 }
                 trace!("TCP creating new listening socket");
@@ -225,15 +232,16 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                 let tx_packets = vec![0; 65_535];
                 let rx_buffer = TcpSocketBuffer::new(rx_packets);
                 let tx_buffer = TcpSocketBuffer::new(tx_packets);
-                let mut socket = TcpSocket::new(rx_buffer, tx_buffer);
+                let socket = TcpSocket::new(rx_buffer, tx_buffer);
+                let new_socket_handle = socket_set.add(socket);
                 {
-                    let tcp_socket: &mut TcpSocket = socket.as_socket();
+                    let mut tcp_socket = socket_set.get::<TcpSocket>(new_socket_handle);
                     tcp_socket
-                        .listen(self.local_endpoint())
+                        .listen(local_endpoint)
                         .expect("Can't listen on local endpoint");
                 }
-                port_set.acquire_port(self.local_endpoint().port);
-                return Ok((new_handle, Some((socket, ()))));
+                port_set.acquire_port(local_endpoint.port);
+                return Ok((new_handle, Some((new_socket_handle, ()))));
             } else {
                 return Err(syscall::Error::new(syscall::EBADF));
             },
@@ -248,7 +256,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         };
 
         if let SchemeFile::Socket(_) = handle {
-            port_set.acquire_port(self.local_endpoint().port);
+            port_set.acquire_port(local_endpoint.port);
         }
 
         Ok((handle, None))

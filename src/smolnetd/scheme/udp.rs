@@ -1,7 +1,8 @@
 use super::socket::*;
 
-use smoltcp::socket::{AsSocket, Socket, SocketHandle, UdpPacketBuffer, UdpSocket, UdpSocketBuffer};
+use smoltcp::socket::{SocketHandle, UdpPacketBuffer, UdpSocket, UdpSocketBuffer};
 use smoltcp::wire::{IpAddress, IpEndpoint, Ipv4Address};
+use smoltcp;
 use std::io::{Read, Write};
 use std::str::FromStr;
 use std::str;
@@ -100,10 +101,11 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
     }
 
     fn new_socket(
+        socket_set: &mut smoltcp::socket::SocketSet<'static, 'static, 'static>,
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
-    ) -> syscall::Result<(Socket<'static, 'static>, Self::DataT)> {
+    ) -> syscall::Result<(SocketHandle, Self::DataT)> {
         let mut parts = path.split('/');
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
         let mut local_endpoint = parse_endpoint(parts.next().unwrap_or(""));
@@ -120,7 +122,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
         }
         let rx_buffer = UdpSocketBuffer::new(rx_packets);
         let tx_buffer = UdpSocketBuffer::new(tx_packets);
-        let mut udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
+        let udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
 
         if local_endpoint.port == 0 {
             local_endpoint.port = port_set
@@ -130,14 +132,14 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             return Err(syscall::Error::new(syscall::EADDRINUSE));
         }
 
-        {
-            let udp_socket: &mut UdpSocket = udp_socket.as_socket();
-            udp_socket
-                .bind(local_endpoint)
-                .expect("Can't bind udp socket to local endpoint");
-        }
+        let socket_handle = socket_set.add(udp_socket);
 
-        Ok((udp_socket, remote_endpoint))
+        let mut udp_socket = socket_set.get::<UdpSocket>(socket_handle);
+        udp_socket
+            .bind(local_endpoint)
+            .expect("Can't bind udp socket to local endpoint");
+
+        Ok((socket_handle, remote_endpoint))
     }
 
     fn close_file(
@@ -185,10 +187,10 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
     }
 
     fn dup(
-        &self,
+        socket_set: &mut smoltcp::socket::SocketSet,
+        socket_handle: SocketHandle,
         file: &mut SchemeFile<Self>,
         fd: usize,
-        socket_handle: SocketHandle,
         path: &str,
         port_set: &mut Self::SchemeDataT,
     ) -> syscall::Result<DupResult<Self>> {
@@ -224,8 +226,13 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             }
         };
 
+        let endpoint = {
+            let socket = socket_set.get::<UdpSocket>(socket_handle);
+            socket.endpoint()
+        };
+
         if let SchemeFile::Socket(_) = handle {
-            port_set.acquire_port(self.endpoint().port);
+            port_set.acquire_port(endpoint.port);
         }
 
         Ok((handle, None))

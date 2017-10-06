@@ -1,7 +1,8 @@
 use super::socket::*;
 
-use smoltcp::socket::{RawPacketBuffer, RawSocket, RawSocketBuffer, Socket, SocketHandle};
+use smoltcp::socket::{RawPacketBuffer, RawSocket, RawSocketBuffer, SocketHandle};
 use smoltcp::wire::{IpProtocol, IpVersion};
+use smoltcp;
 use std::io::{Read, Write};
 use std::str;
 use std::mem;
@@ -93,10 +94,11 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
     }
 
     fn new_socket(
+        socket_set: &mut smoltcp::socket::SocketSet<'static, 'static, 'static>,
         path: &str,
         uid: u32,
         _: &mut Self::SchemeDataT,
-    ) -> syscall::Result<(Socket<'static, 'static>, Self::DataT)> {
+    ) -> syscall::Result<(SocketHandle, Self::DataT)> {
         if uid != 0 {
             return Err(syscall::Error::new(syscall::EACCES));
         }
@@ -117,7 +119,9 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
             rx_buffer,
             tx_buffer,
         );
-        Ok((ip_socket, ()))
+
+        let socket_handle = socket_set.add(ip_socket);
+        Ok((socket_handle, ()))
     }
 
     fn close_file(&self, _: &SchemeFile<Self>, _: &mut Self::SchemeDataT) -> syscall::Result<()> {
@@ -155,10 +159,10 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
     }
 
     fn dup(
-        &self,
-        _: &mut SchemeFile<Self>,
-        fd: usize,
+        _socket_set: &mut smoltcp::socket::SocketSet<'static, 'static, 'static>,
         socket_handle: SocketHandle,
+        _file: &mut SchemeFile<Self>,
+        fd: usize,
         path: &str,
         _: &mut Self::SchemeDataT,
     ) -> syscall::Result<DupResult<Self>> {

@@ -1,4 +1,5 @@
-use smoltcp::socket::{AsSocket, Socket, SocketHandle};
+use smoltcp::socket::{AnySocket, SocketHandle};
+use smoltcp;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -81,7 +82,7 @@ type WaitQueue = Vec<WaitHandle>;
 
 type WaitQueueMap = BTreeMap<SocketHandle, WaitQueue>;
 
-pub type DupResult<T: SchemeSocket> = (SchemeFile<T>, Option<(Socket<'static, 'static>, T::DataT)>);
+pub type DupResult<T: SchemeSocket> = (SchemeFile<T>, Option<(SocketHandle, T::DataT)>);
 
 pub trait SchemeSocket
 where
@@ -100,10 +101,11 @@ where
     fn set_setting(&mut SocketFile<Self::DataT>, Self::SettingT, &[u8]) -> syscall::Result<usize>;
 
     fn new_socket(
+        &mut smoltcp::socket::SocketSet<'static, 'static, 'static>,
         &str,
         u32,
         &mut Self::SchemeDataT,
-    ) -> syscall::Result<(Socket<'static, 'static>, Self::DataT)>;
+    ) -> syscall::Result<(SocketHandle, Self::DataT)>;
     fn close_file(&self, &SchemeFile<Self>, &mut Self::SchemeDataT) -> syscall::Result<()>;
 
     fn write_buf(&mut self, &mut SocketFile<Self::DataT>, buf: &[u8]) -> syscall::Result<usize>;
@@ -112,10 +114,10 @@ where
     fn fpath(&self, &SchemeFile<Self>, &mut [u8]) -> syscall::Result<usize>;
 
     fn dup(
-        &self,
+        &mut smoltcp::socket::SocketSet<'static, 'static, 'static>,
+        SocketHandle,
         &mut SchemeFile<Self>,
         usize,
-        SocketHandle,
         &str,
         &mut Self::SchemeDataT,
     ) -> syscall::Result<DupResult<Self>>;
@@ -123,8 +125,7 @@ where
 
 pub struct SocketScheme<SocketT>
 where
-    SocketT: SchemeSocket,
-    Socket<'static, 'static>: AsSocket<SocketT>,
+    SocketT: SchemeSocket + AnySocket<'static, 'static>,
 {
     next_fd: usize,
     fds: BTreeMap<usize, SchemeFile<SocketT>>,
@@ -137,8 +138,7 @@ where
 
 impl<SocketT> SocketScheme<SocketT>
 where
-    SocketT: SchemeSocket,
-    Socket<'static, 'static>: AsSocket<SocketT>,
+    SocketT: SchemeSocket + AnySocket<'static, 'static>,
 {
     pub fn new(socket_set: SocketSet, scheme_file: File) -> SocketScheme<SocketT> {
         SocketScheme {
@@ -180,7 +180,7 @@ where
             }) = *handle
             {
                 let mut socket_set = self.socket_set.borrow_mut();
-                let socket: &mut SocketT = socket_set.get_mut(socket_handle).as_socket();
+                let socket = socket_set.get::<SocketT>(socket_handle);
 
                 if events & syscall::EVENT_READ == syscall::EVENT_READ && socket.can_recv() {
                     post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ, 1)?;
@@ -373,16 +373,19 @@ where
 
 impl<SocketT> syscall::SchemeMut for SocketScheme<SocketT>
 where
-    SocketT: SchemeSocket,
-    Socket<'static, 'static>: AsSocket<SocketT>,
+    SocketT: SchemeSocket + AnySocket<'static, 'static>,
 {
     fn open(&mut self, url: &[u8], flags: usize, uid: u32, _gid: u32) -> syscall::Result<usize> {
         let path = str::from_utf8(url).or_else(|_| Err(syscall::Error::new(syscall::EINVAL)))?;
         trace!("open {}", path);
 
-        let (socket, data) = SocketT::new_socket(path, uid, &mut self.scheme_data)?;
+        let (socket_handle, data) = SocketT::new_socket(
+            &mut self.socket_set.borrow_mut(),
+            path,
+            uid,
+            &mut self.scheme_data,
+        )?;
 
-        let socket_handle = self.socket_set.borrow_mut().add(socket);
         let id = self.next_fd;
 
         self.fds.insert(
@@ -411,7 +414,7 @@ where
         let scheme_file = self.fds.remove(&fd);
         let mut socket_set = self.socket_set.borrow_mut();
         if let Some(scheme_file) = scheme_file {
-            let socket: &mut SocketT = socket_set.get_mut(socket_handle).as_socket();
+            let socket = socket_set.get::<SocketT>(socket_handle);
             socket.close_file(&scheme_file, &mut self.scheme_data)?;
         }
         let remove_wq =
@@ -447,9 +450,9 @@ where
                 }
                 SchemeFile::Socket(ref mut handle) => {
                     let mut socket_set = self.socket_set.borrow_mut();
-                    let socket: &mut SocketT = socket_set.get_mut(handle.socket_handle).as_socket();
+                    let mut socket = socket_set.get::<SocketT>(handle.socket_handle);
 
-                    return <SocketT as SchemeSocket>::write_buf(socket, handle, buf);
+                    return <SocketT as SchemeSocket>::write_buf(&mut socket, handle, buf);
                 }
             }
         };
@@ -467,8 +470,8 @@ where
                 }
                 SchemeFile::Socket(ref mut handle) => {
                     let mut socket_set = self.socket_set.borrow_mut();
-                    let socket: &mut SocketT = socket_set.get_mut(handle.socket_handle).as_socket();
-                    return <SocketT as SchemeSocket>::read_buf(socket, handle, buf);
+                    let mut socket = socket_set.get::<SocketT>(handle.socket_handle);
+                    return <SocketT as SchemeSocket>::read_buf(&mut socket, handle, buf);
                 }
             }
         };
@@ -485,15 +488,17 @@ where
 
             let socket_handle = handle.socket_handle();
 
-            let (new_handle, update_with) = {
-                let mut socket_set = self.socket_set.borrow_mut();
-                let socket: &mut SocketT = socket_set.get_mut(handle.socket_handle()).as_socket();
-                socket.dup(handle, fd, socket_handle, path, &mut self.scheme_data)?
-            };
+            let (new_handle, update_with) = SocketT::dup(
+                &mut self.socket_set.borrow_mut(),
+                socket_handle,
+                handle,
+                fd,
+                path,
+                &mut self.scheme_data,
+            )?;
 
-            if let Some((socket, data)) = update_with {
+            if let Some((socket_handle, data)) = update_with {
                 if let SchemeFile::Socket(ref mut handle) = *handle {
-                    let socket_handle = self.socket_set.borrow_mut().add(socket);
                     trace!("Updating {} to a new socket handle {:?}", fd, socket_handle);
                     Self::move_handle_to_new_socket_handle(
                         &mut self.wait_queue_map,
@@ -549,7 +554,7 @@ where
             .ok_or_else(|| syscall::Error::new(syscall::EBADF))?;
 
         let mut socket_set = self.socket_set.borrow_mut();
-        let socket: &mut SocketT = socket_set.get_mut(handle.socket_handle()).as_socket();
+        let socket = socket_set.get::<SocketT>(handle.socket_handle());
 
         socket.fpath(handle, buf)
     }
