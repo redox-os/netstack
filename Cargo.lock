@@ -191,7 +191,7 @@ dependencies = [
 [[package]]
 name = "netutils"
 version = "0.1.0"
-source = "git+https://github.com/redox-os/netutils.git#ec1a835a9d4a95a8e41c4e994a540d298d897cd4"
+source = "git+https://github.com/redox-os/netutils.git#29b8efd41d8c56b33c619db78e5b019934dbb7a3"
 dependencies = [
  "arg_parser 0.1.0 (git+https://github.com/redox-os/arg-parser.git)",
  "extra 0.1.0 (git+https://github.com/redox-os/libextra.git)",
@@ -328,7 +328,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "smoltcp"
 version = "0.4.0"
-source = "git+https://github.com/m-labs/smoltcp.git#b0fc1d9542ef3b8e7add3b90dcf2d6f1fc4c633e"
+source = "git+https://github.com/m-labs/smoltcp.git#096ce02ac4c935c4df485a79107fb26b5897065d"
 dependencies = [
  "byteorder 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",

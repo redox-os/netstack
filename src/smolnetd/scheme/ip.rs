@@ -1,30 +1,19 @@
-use super::socket::*;
-
-use smoltcp::socket::{RawPacketBuffer, RawSocket, RawSocketBuffer, Socket, SocketHandle};
+use smoltcp::socket::{RawPacketBuffer, RawSocket, RawSocketBuffer, SocketHandle};
 use smoltcp::wire::{IpProtocol, IpVersion};
-use std::io::{Read, Write};
 use std::str;
-use std::mem;
-use std::ops::Deref;
-use std::ops::DerefMut;
-use syscall::data::TimeSpec;
+use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 
 use device::NetworkDevice;
-use super::Smolnetd;
+use super::{Smolnetd, SocketSet};
+use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
 
 pub type IpScheme = SocketScheme<RawSocket<'static, 'static>>;
-
-#[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub enum Setting {
-    ReadTimeout,
-    WriteTimeout,
-}
 
 impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
     type SchemeDataT = ();
     type DataT = ();
-    type SettingT = Setting;
+    type SettingT = ();
 
     fn new_scheme_data() -> Self::SchemeDataT {
         ()
@@ -39,69 +28,32 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
     }
 
     fn get_setting(
-        file: &SocketFile<Self::DataT>,
-        setting: Self::SettingT,
-        buf: &mut [u8],
-    ) -> syscall::Result<usize> {
-        let timespec = match (setting, file.read_timeout, file.write_timeout) {
-            (Setting::ReadTimeout, Some(read_timeout), _) => read_timeout,
-            (Setting::WriteTimeout, _, Some(write_timeout)) => write_timeout,
-            _ => {
-                return Ok(0);
-            }
-        };
-
-        if buf.len() < mem::size_of::<TimeSpec>() {
-            Ok(0)
-        } else {
-            let count = timespec.deref().read(buf).map_err(|err| {
-                syscall::Error::new(err.raw_os_error().unwrap_or(syscall::EIO))
-            })?;
-            Ok(count)
-        }
+        _file: &SocketFile<Self::DataT>,
+        _setting: Self::SettingT,
+        _buf: &mut [u8],
+    ) -> SyscallResult<usize> {
+        Ok(0)
     }
 
     fn set_setting(
-        file: &mut SocketFile<Self::DataT>,
-        setting: Self::SettingT,
-        buf: &[u8],
-    ) -> syscall::Result<usize> {
-        match setting {
-            Setting::ReadTimeout | Setting::WriteTimeout => {
-                let (timeout, count) = {
-                    if buf.len() < mem::size_of::<TimeSpec>() {
-                        (None, 0)
-                    } else {
-                        let mut timespec = TimeSpec::default();
-                        let count = timespec.deref_mut().write(buf).map_err(|err| {
-                            syscall::Error::new(err.raw_os_error().unwrap_or(syscall::EIO))
-                        })?;
-                        (Some(timespec), count)
-                    }
-                };
-                match setting {
-                    Setting::ReadTimeout => {
-                        file.read_timeout = timeout;
-                    }
-                    Setting::WriteTimeout => {
-                        file.write_timeout = timeout;
-                    }
-                };
-                return Ok(count);
-            }
-        }
+        _file: &mut SocketFile<Self::DataT>,
+        _setting: Self::SettingT,
+        _buf: &[u8],
+    ) -> SyscallResult<usize> {
+        Ok(0)
     }
 
     fn new_socket(
+        socket_set: &mut SocketSet,
         path: &str,
         uid: u32,
         _: &mut Self::SchemeDataT,
-    ) -> syscall::Result<(Socket<'static, 'static>, Self::DataT)> {
+    ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         if uid != 0 {
-            return Err(syscall::Error::new(syscall::EACCES));
+            return Err(SyscallError::new(syscall::EACCES));
         }
         let proto =
-            u8::from_str_radix(path, 16).or_else(|_| Err(syscall::Error::new(syscall::ENOENT)))?;
+            u8::from_str_radix(path, 16).or_else(|_| Err(SyscallError::new(syscall::ENOENT)))?;
 
         let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
         let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
@@ -117,10 +69,12 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
             rx_buffer,
             tx_buffer,
         );
-        Ok((ip_socket, ()))
+
+        let socket_handle = socket_set.add(ip_socket);
+        Ok((socket_handle, ()))
     }
 
-    fn close_file(&self, _: &SchemeFile<Self>, _: &mut Self::SchemeDataT) -> syscall::Result<()> {
+    fn close_file(&self, _: &SchemeFile<Self>, _: &mut Self::SchemeDataT) -> SyscallResult<()> {
         Ok(())
     }
 
@@ -128,14 +82,14 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &[u8],
-    ) -> syscall::Result<usize> {
+    ) -> SyscallResult<usize> {
         if self.can_send() {
             self.send_slice(buf).expect("Can't send slice");
             Ok(buf.len())
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Ok(0)
         } else {
-            Err(syscall::Error::new(syscall::EWOULDBLOCK))
+            Err(SyscallError::new(syscall::EWOULDBLOCK))
         }
     }
 
@@ -143,37 +97,36 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
-    ) -> syscall::Result<usize> {
+    ) -> SyscallResult<usize> {
         if self.can_recv() {
             let length = self.recv_slice(buf).expect("Can't receive slice");
             Ok(length)
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Ok(0)
         } else {
-            Err(syscall::Error::new(syscall::EWOULDBLOCK))
+            Err(SyscallError::new(syscall::EWOULDBLOCK))
         }
     }
 
     fn dup(
-        &self,
-        _: &mut SchemeFile<Self>,
-        fd: usize,
-        socket_handle: SocketHandle,
-        path: &str,
+        _socket_set: &mut SocketSet,
+        _file: &mut SchemeFile<Self>,
+        _path: &str,
         _: &mut Self::SchemeDataT,
-    ) -> syscall::Result<SchemeFile<Self>> {
-        match path {
-            "write_timeout" => Ok(SchemeFile::Setting(SettingFile {
-                socket_handle,
-                fd,
-                setting: Setting::WriteTimeout,
-            })),
-            "read_timeout" => Ok(SchemeFile::Setting(SettingFile {
-                socket_handle,
-                fd,
-                setting: Setting::ReadTimeout,
-            })),
-            _ => Err(syscall::Error::new(syscall::EBADF)),
+    ) -> SyscallResult<DupResult<Self>> {
+        Err(SyscallError::new(syscall::EBADF))
+    }
+
+    fn fpath(&self, _file: &SchemeFile<Self>, buf: &mut [u8]) -> SyscallResult<usize> {
+        let path = format!("ip:{}", self.ip_protocol());
+        let path = path.as_bytes();
+
+        let mut i = 0;
+        while i < buf.len() && i < path.len() {
+            buf[i] = path[i];
+            i += 1;
         }
+
+        Ok(i)
     }
 }

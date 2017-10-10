@@ -68,9 +68,7 @@ impl BufferPool {
 
     pub fn get_buffer(&mut self) -> Buffer {
         let buffer = match self.stack.borrow_mut().pop() {
-            None => {
-                vec![0u8; self.buffers_size]
-            }
+            None => vec![0u8; self.buffers_size],
             Some(mut v) => {
                 // memsetting the buffer with `resize` would be a waste of time
                 let capacity = v.capacity();

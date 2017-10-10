@@ -1,3 +1,5 @@
+#![feature(drain_filter)]
+
 extern crate event;
 #[macro_use]
 extern crate log;
@@ -19,8 +21,8 @@ mod buffer_pool;
 mod device;
 mod error;
 mod logger;
-mod scheme;
 mod port_set;
+mod scheme;
 
 fn run() -> Result<()> {
     use syscall::flag::*;
