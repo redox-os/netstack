@@ -70,6 +70,8 @@ fn run() -> Result<()> {
     let mut event_queue = EventQueue::<(), Error>::new()
         .map_err(|e| Error::from_io_error(e, "failed to create event queue"))?;
 
+    syscall::setrens(0, 0).expect("smolnetd: failed to enter null namespace");
+
     let smolnetd_ = Rc::clone(&smolnetd);
 
     event_queue
