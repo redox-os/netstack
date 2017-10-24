@@ -23,6 +23,7 @@ mod error;
 mod logger;
 mod port_set;
 mod scheme;
+mod arp_cache;
 
 fn run() -> Result<()> {
     use syscall::flag::*;

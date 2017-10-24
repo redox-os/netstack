@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut, Drop};
 use std::rc::Rc;
 use std::cell::RefCell;
-use std::mem::swap;
+use std::mem::{replace, swap};
 
 type BufferStack = Rc<RefCell<Vec<Vec<u8>>>>;
 
@@ -13,6 +13,13 @@ pub struct Buffer {
 impl Buffer {
     pub fn resize(&mut self, new_len: usize) {
         self.buffer.resize(new_len, 0u8);
+    }
+
+    pub fn move_out(&mut self) -> Buffer {
+        Buffer {
+            buffer: replace(&mut self.buffer, vec![]),
+            stack: self.stack.clone(),
+        }
     }
 }
 
@@ -44,11 +51,13 @@ impl DerefMut for Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        let mut tmp = vec![];
-        swap(&mut tmp, &mut self.buffer);
-        {
-            let mut stack = self.stack.borrow_mut();
-            stack.push(tmp);
+        if self.buffer.capacity() > 0 {
+            let mut tmp = vec![];
+            swap(&mut tmp, &mut self.buffer);
+            {
+                let mut stack = self.stack.borrow_mut();
+                stack.push(tmp);
+            }
         }
     }
 }

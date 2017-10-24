@@ -1,5 +1,5 @@
 use netutils::getcfg;
-use smoltcp::iface::{ArpCache, EthernetInterface, SliceArpCache};
+use smoltcp::iface::{ArpCache, EthernetInterface};
 use smoltcp::socket::SocketSet as SmoltcpSocketSet;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
 use std::cell::RefCell;
@@ -16,6 +16,7 @@ use syscall;
 use buffer_pool::{Buffer, BufferPool};
 use device::NetworkDevice;
 use error::{Error, Result};
+use arp_cache::LoArpCache;
 use self::ip::IpScheme;
 use self::tcp::TcpScheme;
 use self::udp::UdpScheme;
@@ -41,11 +42,11 @@ pub struct Smolnetd {
     tcp_scheme: TcpScheme,
 
     input_queue: Rc<RefCell<VecDeque<Buffer>>>,
-    input_buffer_pool: BufferPool,
+    buffer_pool: Rc<RefCell<BufferPool>>,
 }
 
 impl Smolnetd {
-    const INGRESS_PACKET_SIZE: usize = 2048;
+    const MAX_PACKET_SIZE: usize = 2048;
     const SOCKET_BUFFER_SIZE: usize = 128; //packets
     const MIN_CHECK_TIMEOUT_MS: i64 = 10;
     const MAX_CHECK_TIMEOUT_MS: i64 = 500;
@@ -57,17 +58,28 @@ impl Smolnetd {
         tcp_file: File,
         time_file: File,
     ) -> Smolnetd {
-        let arp_cache = SliceArpCache::new(vec![Default::default(); 8]);
         let hardware_addr = EthernetAddress::from_str(getcfg("mac").unwrap().trim())
             .expect("Can't parse the 'mac' cfg");
         let local_ip =
             IpAddress::from_str(getcfg("ip").unwrap().trim()).expect("Can't parse the 'ip' cfg.");
-        let protocol_addrs = [IpCidr::new(local_ip, 24)];
+        let protocol_addrs = [
+            IpCidr::new(local_ip, 24),
+            IpCidr::new(IpAddress::v4(127, 0, 0, 1), 8),
+        ];
         let default_gw = Ipv4Address::from_str(getcfg("ip_router").unwrap().trim())
             .expect("Can't parse the 'ip_router' cfg.");
+
+
+        let buffer_pool = Rc::new(RefCell::new(BufferPool::new(Self::MAX_PACKET_SIZE)));
         let input_queue = Rc::new(RefCell::new(VecDeque::new()));
         let network_file = Rc::new(RefCell::new(network_file));
-        let network_device = NetworkDevice::new(Rc::clone(&network_file), Rc::clone(&input_queue));
+        let network_device = NetworkDevice::new(
+            Rc::clone(&network_file),
+            Rc::clone(&input_queue),
+            hardware_addr,
+            buffer_pool.clone(),
+        );
+        let arp_cache = LoArpCache::new(protocol_addrs.iter().map(IpCidr::address));
         let iface = EthernetInterface::new(
             Box::new(network_device),
             Box::new(arp_cache) as Box<ArpCache>,
@@ -86,7 +98,7 @@ impl Smolnetd {
             tcp_scheme: TcpScheme::new(Rc::clone(&socket_set), tcp_file),
             input_queue,
             network_file,
-            input_buffer_pool: BufferPool::new(Self::INGRESS_PACKET_SIZE),
+            buffer_pool,
         }
     }
 
@@ -173,7 +185,7 @@ impl Smolnetd {
     fn read_frames(&mut self) -> Result<usize> {
         let mut total_frames = 0;
         loop {
-            let mut buffer = self.input_buffer_pool.get_buffer();
+            let mut buffer = self.buffer_pool.borrow_mut().get_buffer();
             let count = self.network_file
                 .borrow_mut()
                 .read(&mut buffer)

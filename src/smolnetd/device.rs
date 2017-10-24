@@ -5,11 +5,14 @@ use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
 
-use buffer_pool::Buffer;
+use buffer_pool::{Buffer, BufferPool};
+use arp_cache::LOOPBACK_HWADDR;
 
 pub struct NetworkDevice {
     network_file: Rc<RefCell<File>>,
     input_queue: Rc<RefCell<VecDeque<Buffer>>>,
+    local_hwaddr: smoltcp::wire::EthernetAddress,
+    buffer_pool: Rc<RefCell<BufferPool>>,
 }
 
 impl NetworkDevice {
@@ -18,17 +21,23 @@ impl NetworkDevice {
     pub fn new(
         network_file: Rc<RefCell<File>>,
         input_queue: Rc<RefCell<VecDeque<Buffer>>>,
+        local_hwaddr: smoltcp::wire::EthernetAddress,
+        buffer_pool: Rc<RefCell<BufferPool>>,
     ) -> NetworkDevice {
         NetworkDevice {
             network_file,
             input_queue,
+            local_hwaddr,
+            buffer_pool,
         }
     }
 }
 
 pub struct TxBuffer {
-    buffer: Vec<u8>,
+    buffer: Buffer,
     network_file: Rc<RefCell<File>>,
+    input_queue: Rc<RefCell<VecDeque<Buffer>>>,
+    local_hwaddr: smoltcp::wire::EthernetAddress,
 }
 
 impl AsRef<[u8]> for TxBuffer {
@@ -45,7 +54,22 @@ impl AsMut<[u8]> for TxBuffer {
 
 impl Drop for TxBuffer {
     fn drop(&mut self) {
-        let _ = self.network_file.borrow_mut().write(&self.buffer);
+        let mut loopback = false;
+
+        if let Ok(mut frame) = smoltcp::wire::EthernetFrame::new_checked(&mut self.buffer) {
+            if frame.dst_addr() == LOOPBACK_HWADDR {
+                frame.set_dst_addr(self.local_hwaddr);
+                loopback = true;
+            }
+        }
+
+        if loopback {
+            self.input_queue
+                .borrow_mut()
+                .push_back(self.buffer.move_out());
+        } else {
+            let _ = self.network_file.borrow_mut().write(&self.buffer);
+        }
     }
 }
 
@@ -68,9 +92,13 @@ impl smoltcp::phy::Device for NetworkDevice {
     }
 
     fn transmit(&mut self, _timestamp: u64, length: usize) -> smoltcp::Result<Self::TxBuffer> {
+        let mut buffer = self.buffer_pool.borrow_mut().get_buffer();
+        buffer.resize(length);
         Ok(TxBuffer {
             network_file: Rc::clone(&self.network_file),
-            buffer: vec![0; length],
+            buffer,
+            input_queue: Rc::clone(&self.input_queue),
+            local_hwaddr: self.local_hwaddr,
         })
     }
 }
