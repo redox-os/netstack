@@ -18,7 +18,7 @@ impl Buffer {
     pub fn move_out(&mut self) -> Buffer {
         Buffer {
             buffer: replace(&mut self.buffer, vec![]),
-            stack: self.stack.clone(),
+            stack: Rc::clone(&self.stack),
         }
     }
 }

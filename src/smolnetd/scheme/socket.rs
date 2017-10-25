@@ -112,6 +112,9 @@ where
     fn can_send(&self) -> bool;
     fn can_recv(&self) -> bool;
 
+    fn ttl(&self) -> u8;
+    fn set_ttl(&mut self, u8);
+
     fn get_setting(&SocketFile<Self::DataT>, Self::SettingT, &mut [u8]) -> SyscallResult<usize>;
     fn set_setting(&mut SocketFile<Self::DataT>, Self::SettingT, &[u8]) -> SyscallResult<usize>;
 
@@ -362,24 +365,38 @@ where
             }
         };
 
-        if let Setting::Other(setting) = setting {
-            SocketT::get_setting(file, setting, buf)
-        } else {
-            let timespec = match (setting, file.read_timeout, file.write_timeout) {
-                (Setting::ReadTimeout, Some(read_timeout), _) => read_timeout,
-                (Setting::WriteTimeout, _, Some(write_timeout)) => write_timeout,
-                _ => {
-                    return Ok(0);
+        match setting {
+            Setting::Other(setting) => {
+                SocketT::get_setting(file, setting, buf)
+            },
+            Setting::Ttl => {
+                if let Some(ttl) = buf.get_mut(0) {
+                    let mut socket_set = self.socket_set.borrow_mut();
+                    let socket = socket_set.get::<SocketT>(file.socket_handle);
+                    *ttl = socket.ttl();
+                    Ok(1)
+                } else {
+                    Err(SyscallError::new(syscall::EIO))
                 }
-            };
+            },
+            Setting::ReadTimeout |
+            Setting::WriteTimeout => {
+                let timespec = match (setting, file.read_timeout, file.write_timeout) {
+                    (Setting::ReadTimeout, Some(read_timeout), _) => read_timeout,
+                    (Setting::WriteTimeout, _, Some(write_timeout)) => write_timeout,
+                    _ => {
+                        return Ok(0);
+                    }
+                };
 
-            if buf.len() < mem::size_of::<TimeSpec>() {
-                Ok(0)
-            } else {
-                let count = timespec.deref().read(buf).map_err(|err| {
-                    SyscallError::new(err.raw_os_error().unwrap_or(syscall::EIO))
-                })?;
-                Ok(count)
+                if buf.len() < mem::size_of::<TimeSpec>() {
+                    Ok(0)
+                } else {
+                    let count = timespec.deref().read(buf).map_err(|err| {
+                        SyscallError::new(err.raw_os_error().unwrap_or(syscall::EIO))
+                    })?;
+                    Ok(count)
+                }
             }
         }
     }
@@ -423,7 +440,16 @@ where
                 };
                 Ok(count)
             }
-            Setting::Ttl => Ok(0),
+            Setting::Ttl => {
+                if let Some(ttl) = buf.get(0) {
+                    let mut socket_set = self.socket_set.borrow_mut();
+                    let mut socket = socket_set.get::<SocketT>(file.socket_handle);
+                    socket.set_ttl(*ttl);
+                    Ok(1)
+                } else {
+                    Err(SyscallError::new(syscall::EIO))
+                }
+            }
             Setting::Other(setting) => SocketT::set_setting(file, setting, buf),
         }
     }

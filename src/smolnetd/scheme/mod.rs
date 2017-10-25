@@ -77,7 +77,7 @@ impl Smolnetd {
             Rc::clone(&network_file),
             Rc::clone(&input_queue),
             hardware_addr,
-            buffer_pool.clone(),
+            Rc::clone(&buffer_pool),
         );
         let arp_cache = LoArpCache::new(protocol_addrs.iter().map(IpCidr::address));
         let iface = EthernetInterface::new(

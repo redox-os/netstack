@@ -30,7 +30,7 @@ impl ArpCache for LoArpCache {
 
     fn lookup(&mut self, protocol_addr: &IpAddress) -> Option<EthernetAddress> {
         //TODO: use IpAddress::is_loopback
-        if let &IpAddress::Ipv4(ipv4_addr) = protocol_addr {
+        if let IpAddress::Ipv4(ipv4_addr) = *protocol_addr {
             if ipv4_addr.is_loopback() {
                 return Some(LOOPBACK_HWADDR);
             }

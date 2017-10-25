@@ -43,6 +43,13 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
         Ok(0)
     }
 
+    fn ttl(&self) -> u8 {
+        0
+    }
+
+    fn set_ttl(&mut self, _ttl: u8) {
+    }
+
     fn new_socket(
         socket_set: &mut SocketSet,
         path: &str,

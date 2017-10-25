@@ -26,6 +26,14 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         self.can_recv()
     }
 
+    fn ttl(&self) -> u8 {
+        self.ttl().unwrap_or(64)
+    }
+
+    fn set_ttl(&mut self, ttl: u8) {
+        self.set_ttl(Some(ttl));
+    }
+
     fn get_setting(
         _file: &SocketFile<Self::DataT>,
         _setting: Self::SettingT,
