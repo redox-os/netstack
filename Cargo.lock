@@ -1,15 +1,3 @@
-[root]
-name = "redox_netstack"
-version = "0.1.0"
-dependencies = [
- "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
- "netutils 0.1.0 (git+https://github.com/redox-os/netutils.git)",
- "rand 0.3.17 (registry+https://github.com/rust-lang/crates.io-index)",
- "redox_event 0.1.0 (git+https://github.com/redox-os/event.git)",
- "redox_syscall 0.1.31 (registry+https://github.com/rust-lang/crates.io-index)",
- "smoltcp 0.4.0 (git+https://github.com/m-labs/smoltcp.git)",
-]
-
 [[package]]
 name = "arg_parser"
 version = "0.1.0"
@@ -148,7 +136,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "libc"
-version = "0.2.32"
+version = "0.2.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -177,13 +165,13 @@ dependencies = [
 [[package]]
 name = "netutils"
 version = "0.1.0"
-source = "git+https://github.com/redox-os/netutils.git#2c082a38814922125ca402103a1a50d5531f6330"
+source = "git+https://github.com/redox-os/netutils.git#a719fa50b065840ffacc81d989e47f258b3e5170"
 dependencies = [
  "arg_parser 0.1.0 (git+https://github.com/redox-os/arg-parser.git)",
  "extra 0.1.0 (git+https://github.com/redox-os/libextra.git)",
  "hyper 0.10.13 (registry+https://github.com/rust-lang/crates.io-index)",
  "hyper-rustls 0.6.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "ntpclient 0.0.1 (git+https://github.com/willem66745/ntpclient-rust)",
  "pbr 1.0.0 (git+https://github.com/a8m/pb)",
  "redox_event 0.1.0 (git+https://github.com/redox-os/event.git)",
@@ -205,7 +193,7 @@ name = "num_cpus"
 version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -214,7 +202,7 @@ version = "1.0.0"
 source = "git+https://github.com/a8m/pb#e9369ed2b94df4f554fe79c2643de41f7338475f"
 dependencies = [
  "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "termion 1.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
@@ -231,7 +219,7 @@ version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "fuchsia-zircon 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -250,7 +238,7 @@ dependencies = [
  "coco 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "futures 0.1.16 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 0.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "num_cpus 1.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "rand 0.3.17 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -261,6 +249,18 @@ version = "0.1.0"
 source = "git+https://github.com/redox-os/event.git#bb96d9cd6dd01d4118deae84722a522b8328fa9f"
 dependencies = [
  "redox_syscall 0.1.31 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
+name = "redox_netstack"
+version = "0.1.0"
+dependencies = [
+ "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "netutils 0.1.0 (git+https://github.com/redox-os/netutils.git)",
+ "rand 0.3.17 (registry+https://github.com/rust-lang/crates.io-index)",
+ "redox_event 0.1.0 (git+https://github.com/redox-os/event.git)",
+ "redox_syscall 0.1.31 (registry+https://github.com/rust-lang/crates.io-index)",
+ "smoltcp 0.4.0 (git+https://github.com/redox-os/smoltcp.git)",
 ]
 
 [[package]]
@@ -283,7 +283,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "gcc 0.3.54 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static 0.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "rayon 0.7.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "untrusted 0.5.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -314,10 +314,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "smoltcp"
 version = "0.4.0"
-source = "git+https://github.com/m-labs/smoltcp.git#f64a99a4e6d744c3a6f3d9a54a0fb3f94e4b0ec8"
+source = "git+https://github.com/redox-os/smoltcp.git#a6fc036ad65e07523e271304bb96d99a9f9a2707"
 dependencies = [
  "byteorder 1.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
- "log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "managed 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -326,7 +325,7 @@ name = "termion"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_syscall 0.1.31 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_termios 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -337,7 +336,7 @@ version = "0.1.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)",
  "redox_syscall 0.1.31 (registry+https://github.com/rust-lang/crates.io-index)",
  "winapi 0.2.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
@@ -442,7 +441,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum kernel32-sys 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "7507624b29483431c0ba2d82aece8ca6cdba9382bff4ddd0f7490560c056098d"
 "checksum language-tags 0.2.2 (registry+https://github.com/rust-lang/crates.io-index)" = "a91d884b6667cd606bb5a69aa0c99ba811a115fc68915e7056ec08a46e93199a"
 "checksum lazy_static 0.2.9 (registry+https://github.com/rust-lang/crates.io-index)" = "c9e5e58fa1a4c3b915a561a78a22ee0cac6ab97dca2504428bc1cb074375f8d5"
-"checksum libc 0.2.32 (registry+https://github.com/rust-lang/crates.io-index)" = "56cce3130fd040c28df6f495c8492e5ec5808fb4c9093c310df02b0c8f030148"
+"checksum libc 0.2.33 (registry+https://github.com/rust-lang/crates.io-index)" = "5ba3df4dcb460b9dfbd070d41c94c19209620c191b0340b929ce748a2bcd42d2"
 "checksum log 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)" = "880f77541efa6e5cc74e76910c9884d9859683118839d6a1dc3b11e63512565b"
 "checksum managed 0.4.0 (registry+https://github.com/rust-lang/crates.io-index)" = "b5d48e8c30a4363e2981fe4db20527f6ab0f32a243bbc75379dea5a64f60dae4"
 "checksum matches 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)" = "100aabe6b8ff4e4a7e32c1c13523379802df0772b82466207ac25b013f193376"
@@ -462,7 +461,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 "checksum rustls 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)" = "17727f4b991294da2c84d75a43c003151ff58072212768800f66c56ee46dca43"
 "checksum safemem 0.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "e27a8b19b835f7aea908818e871f5cc3a5a186550c30773be987e155e8163d8f"
 "checksum scopeguard 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)" = "94258f53601af11e6a49f722422f6e3425c52b06245a5cf9bc09908b174f5e27"
-"checksum smoltcp 0.4.0 (git+https://github.com/m-labs/smoltcp.git)" = "<none>"
+"checksum smoltcp 0.4.0 (git+https://github.com/redox-os/smoltcp.git)" = "<none>"
 "checksum termion 1.5.1 (registry+https://github.com/rust-lang/crates.io-index)" = "689a3bdfaab439fd92bc87df5c4c78417d3cbe537487274e9b0b2dce76e92096"
 "checksum time 0.1.38 (registry+https://github.com/rust-lang/crates.io-index)" = "d5d788d3aa77bc0ef3e9621256885555368b47bd495c13dd2e7413c89f845520"
 "checksum traitobject 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)" = "efd1f82c56340fdf16f2a953d7bda4f8fdffba13d93b00844c25572110b26079"
