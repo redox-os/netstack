@@ -8,11 +8,15 @@ use std::rc::Rc;
 use buffer_pool::{Buffer, BufferPool};
 use arp_cache::LOOPBACK_HWADDR;
 
-pub struct NetworkDevice {
+struct NetworkDeviceData {
     network_file: Rc<RefCell<File>>,
     input_queue: Rc<RefCell<VecDeque<Buffer>>>,
     local_hwaddr: smoltcp::wire::EthernetAddress,
     buffer_pool: Rc<RefCell<BufferPool>>,
+}
+
+pub struct NetworkDevice {
+    data: Rc<RefCell<NetworkDeviceData>>,
 }
 
 impl NetworkDevice {
@@ -25,57 +29,67 @@ impl NetworkDevice {
         buffer_pool: Rc<RefCell<BufferPool>>,
     ) -> NetworkDevice {
         NetworkDevice {
-            network_file,
-            input_queue,
-            local_hwaddr,
-            buffer_pool,
+            data: Rc::new(RefCell::new(NetworkDeviceData {
+                network_file,
+                input_queue,
+                local_hwaddr,
+                buffer_pool,
+            })),
         }
     }
 }
 
-pub struct TxBuffer {
+pub struct RxToken {
     buffer: Buffer,
-    network_file: Rc<RefCell<File>>,
-    input_queue: Rc<RefCell<VecDeque<Buffer>>>,
-    local_hwaddr: smoltcp::wire::EthernetAddress,
 }
 
-impl AsRef<[u8]> for TxBuffer {
-    fn as_ref(&self) -> &[u8] {
-        self.buffer.as_ref()
+impl smoltcp::phy::RxToken for RxToken {
+    fn consume<R, F>(self, _timestamp: u64, f: F) -> smoltcp::Result<R>
+    where
+        F: FnOnce(&[u8]) -> smoltcp::Result<R>,
+    {
+        f(&self.buffer)
     }
 }
 
-impl AsMut<[u8]> for TxBuffer {
-    fn as_mut(&mut self) -> &mut [u8] {
-        self.buffer.as_mut()
-    }
+pub struct TxToken {
+    data: Rc<RefCell<NetworkDeviceData>>,
 }
 
-impl Drop for TxBuffer {
-    fn drop(&mut self) {
+impl smoltcp::phy::TxToken for TxToken {
+    fn consume<R, F>(self, _timestamp: u64, len: usize, f: F) -> smoltcp::Result<R>
+    where
+        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+    {
+        let data = self.data.borrow_mut();
+        let mut buffer = data.buffer_pool.borrow_mut().get_buffer();
+        buffer.resize(len);
+        let res = f(&mut buffer)?;
+
         let mut loopback = false;
-
-        if let Ok(mut frame) = smoltcp::wire::EthernetFrame::new_checked(&mut self.buffer) {
+        if let Ok(mut frame) = smoltcp::wire::EthernetFrame::new_checked(&mut buffer) {
             if frame.dst_addr() == LOOPBACK_HWADDR {
-                frame.set_dst_addr(self.local_hwaddr);
+                frame.set_dst_addr(data.local_hwaddr);
                 loopback = true;
             }
         }
 
         if loopback {
-            self.input_queue
-                .borrow_mut()
-                .push_back(self.buffer.move_out());
+            data.input_queue.borrow_mut().push_back(buffer.move_out());
         } else {
-            let _ = self.network_file.borrow_mut().write(&self.buffer);
+            data.network_file
+                .borrow_mut()
+                .write(&buffer)
+                .map_err(|_| smoltcp::Error::Dropped)?;
         }
+
+        Ok(res)
     }
 }
 
-impl smoltcp::phy::Device for NetworkDevice {
-    type RxBuffer = Buffer;
-    type TxBuffer = TxBuffer;
+impl<'a> smoltcp::phy::Device<'a> for NetworkDevice {
+    type RxToken = RxToken;
+    type TxToken = TxToken;
 
     fn capabilities(&self) -> smoltcp::phy::DeviceCapabilities {
         let mut limits = smoltcp::phy::DeviceCapabilities::default();
@@ -84,21 +98,25 @@ impl smoltcp::phy::Device for NetworkDevice {
         limits
     }
 
-    fn receive(&mut self, _timestamp: u64) -> smoltcp::Result<Self::RxBuffer> {
-        self.input_queue
-            .borrow_mut()
-            .pop_front()
-            .ok_or(smoltcp::Error::Exhausted)
+    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+        let data = self.data.borrow_mut();
+        let buffer = data.input_queue.borrow_mut().pop_front();
+
+        if let Some(buffer) = buffer {
+            Some((
+                RxToken { buffer },
+                TxToken {
+                    data: Rc::clone(&self.data),
+                },
+            ))
+        } else {
+            None
+        }
     }
 
-    fn transmit(&mut self, _timestamp: u64, length: usize) -> smoltcp::Result<Self::TxBuffer> {
-        let mut buffer = self.buffer_pool.borrow_mut().get_buffer();
-        buffer.resize(length);
-        Ok(TxBuffer {
-            network_file: Rc::clone(&self.network_file),
-            buffer,
-            input_queue: Rc::clone(&self.input_queue),
-            local_hwaddr: self.local_hwaddr,
+    fn transmit(&'a mut self) -> Option<Self::TxToken> {
+        Some(TxToken {
+            data: Rc::clone(&self.data),
         })
     }
 }
