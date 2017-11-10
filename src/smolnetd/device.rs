@@ -94,7 +94,7 @@ impl<'a> smoltcp::phy::Device<'a> for NetworkDevice {
     fn capabilities(&self) -> smoltcp::phy::DeviceCapabilities {
         let mut limits = smoltcp::phy::DeviceCapabilities::default();
         limits.max_transmission_unit = Self::MTU;
-        limits.max_burst_size = Some(5);
+        limits.max_burst_size = Some(20);
         limits
     }
 

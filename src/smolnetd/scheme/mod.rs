@@ -32,7 +32,7 @@ pub struct Smolnetd {
     network_file: Rc<RefCell<File>>,
     time_file: File,
 
-    iface: EthernetInterface<'static, 'static, 'static, NetworkDevice>,
+    iface: EthernetInterface<'static, 'static, NetworkDevice>,
     socket_set: Rc<RefCell<SocketSet>>,
 
     startup_time: Instant,
@@ -81,7 +81,7 @@ impl Smolnetd {
         );
         let arp_cache = LoArpCache::new(protocol_addrs.iter().map(IpCidr::address));
         let iface = EthernetInterface::new(
-            Box::new(network_device),
+            network_device,
             Box::new(arp_cache) as Box<ArpCache>,
             hardware_addr,
             protocol_addrs,
