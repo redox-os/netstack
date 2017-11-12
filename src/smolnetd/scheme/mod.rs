@@ -20,11 +20,13 @@ use arp_cache::LoArpCache;
 use self::ip::IpScheme;
 use self::tcp::TcpScheme;
 use self::udp::UdpScheme;
+use self::icmp::IcmpScheme;
 
 mod ip;
 mod socket;
 mod tcp;
 mod udp;
+mod icmp;
 
 type SocketSet = SmoltcpSocketSet<'static, 'static, 'static>;
 
@@ -40,6 +42,7 @@ pub struct Smolnetd {
     ip_scheme: IpScheme,
     udp_scheme: UdpScheme,
     tcp_scheme: TcpScheme,
+    icmp_scheme: IcmpScheme,
 
     input_queue: Rc<RefCell<VecDeque<Buffer>>>,
     buffer_pool: Rc<RefCell<BufferPool>>,
@@ -56,6 +59,7 @@ impl Smolnetd {
         ip_file: File,
         udp_file: File,
         tcp_file: File,
+        icmp_file: File,
         time_file: File,
     ) -> Smolnetd {
         let hardware_addr = EthernetAddress::from_str(getcfg("mac").unwrap().trim())
@@ -68,7 +72,6 @@ impl Smolnetd {
         ];
         let default_gw = Ipv4Address::from_str(getcfg("ip_router").unwrap().trim())
             .expect("Can't parse the 'ip_router' cfg.");
-
 
         let buffer_pool = Rc::new(RefCell::new(BufferPool::new(Self::MAX_PACKET_SIZE)));
         let input_queue = Rc::new(RefCell::new(VecDeque::new()));
@@ -96,6 +99,7 @@ impl Smolnetd {
             ip_scheme: IpScheme::new(Rc::clone(&socket_set), ip_file),
             udp_scheme: UdpScheme::new(Rc::clone(&socket_set), udp_file),
             tcp_scheme: TcpScheme::new(Rc::clone(&socket_set), tcp_file),
+            icmp_scheme: IcmpScheme::new(Rc::clone(&socket_set), icmp_file),
             input_queue,
             network_file,
             buffer_pool,
@@ -123,6 +127,12 @@ impl Smolnetd {
 
     pub fn on_tcp_scheme_event(&mut self) -> Result<Option<()>> {
         self.tcp_scheme.on_scheme_event()?;
+        let _ = self.poll()?;
+        Ok(None)
+    }
+
+    pub fn on_icmp_scheme_event(&mut self) -> Result<Option<()>> {
+        self.icmp_scheme.on_scheme_event()?;
         let _ = self.poll()?;
         Ok(None)
     }
@@ -210,7 +220,8 @@ impl Smolnetd {
     fn notify_sockets(&mut self) -> Result<()> {
         self.ip_scheme.notify_sockets()?;
         self.udp_scheme.notify_sockets()?;
-        self.tcp_scheme.notify_sockets()
+        self.tcp_scheme.notify_sockets()?;
+        self.icmp_scheme.notify_sockets()
     }
 }
 

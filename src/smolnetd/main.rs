@@ -47,18 +47,24 @@ fn run() -> Result<()> {
         .map_err(|e| Error::from_syscall_error(e, "failed to open :tcp"))?
         as RawFd;
 
+    trace!("opening :icmp");
+    let icmp_fd = syscall::open(":icmp", O_RDWR | O_CREAT | O_NONBLOCK)
+        .map_err(|e| Error::from_syscall_error(e, "failed to open :icmp"))?
+        as RawFd;
+
     let time_path = format!("time:{}", syscall::CLOCK_MONOTONIC);
     let time_fd = syscall::open(&time_path, syscall::O_RDWR)
         .map_err(|e| Error::from_syscall_error(e, "failed to open time:"))?
         as RawFd;
 
-    let (network_file, ip_file, time_file, udp_file, tcp_file) = unsafe {
+    let (network_file, ip_file, time_file, udp_file, tcp_file, icmp_file) = unsafe {
         (
             File::from_raw_fd(network_fd),
             File::from_raw_fd(ip_fd),
             File::from_raw_fd(time_fd),
             File::from_raw_fd(udp_fd),
             File::from_raw_fd(tcp_fd),
+            File::from_raw_fd(icmp_fd),
         )
     };
 
@@ -67,6 +73,7 @@ fn run() -> Result<()> {
         ip_file,
         udp_file,
         tcp_file,
+        icmp_file,
         time_file,
     )));
 
@@ -111,6 +118,16 @@ fn run() -> Result<()> {
         )
         .map_err(|e| {
             Error::from_io_error(e, "failed to listen to tcp events")
+        })?;
+
+    let smolnetd_ = Rc::clone(&smolnetd);
+
+    event_queue
+        .add(icmp_fd, move |_| {
+            smolnetd_.borrow_mut().on_icmp_scheme_event()
+        })
+        .map_err(|e| {
+            Error::from_io_error(e, "failed to listen to icmp events")
         })?;
 
     event_queue

@@ -14,7 +14,7 @@ use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallR
 use syscall;
 
 use error::{Error, Result};
-use super::{SocketSet, post_fevent};
+use super::{post_fevent, SocketSet};
 
 pub struct SocketFile<DataT> {
     pub flags: usize,
@@ -366,21 +366,16 @@ where
         };
 
         match setting {
-            Setting::Other(setting) => {
-                SocketT::get_setting(file, setting, buf)
+            Setting::Other(setting) => SocketT::get_setting(file, setting, buf),
+            Setting::Ttl => if let Some(ttl) = buf.get_mut(0) {
+                let mut socket_set = self.socket_set.borrow_mut();
+                let socket = socket_set.get::<SocketT>(file.socket_handle);
+                *ttl = socket.ttl();
+                Ok(1)
+            } else {
+                Err(SyscallError::new(syscall::EIO))
             },
-            Setting::Ttl => {
-                if let Some(ttl) = buf.get_mut(0) {
-                    let mut socket_set = self.socket_set.borrow_mut();
-                    let socket = socket_set.get::<SocketT>(file.socket_handle);
-                    *ttl = socket.ttl();
-                    Ok(1)
-                } else {
-                    Err(SyscallError::new(syscall::EIO))
-                }
-            },
-            Setting::ReadTimeout |
-            Setting::WriteTimeout => {
+            Setting::ReadTimeout | Setting::WriteTimeout => {
                 let timespec = match (setting, file.read_timeout, file.write_timeout) {
                     (Setting::ReadTimeout, Some(read_timeout), _) => read_timeout,
                     (Setting::WriteTimeout, _, Some(write_timeout)) => write_timeout,
@@ -440,16 +435,14 @@ where
                 };
                 Ok(count)
             }
-            Setting::Ttl => {
-                if let Some(ttl) = buf.get(0) {
-                    let mut socket_set = self.socket_set.borrow_mut();
-                    let mut socket = socket_set.get::<SocketT>(file.socket_handle);
-                    socket.set_ttl(*ttl);
-                    Ok(1)
-                } else {
-                    Err(SyscallError::new(syscall::EIO))
-                }
-            }
+            Setting::Ttl => if let Some(ttl) = buf.get(0) {
+                let mut socket_set = self.socket_set.borrow_mut();
+                let mut socket = socket_set.get::<SocketT>(file.socket_handle);
+                socket.set_ttl(*ttl);
+                Ok(1)
+            } else {
+                Err(SyscallError::new(syscall::EIO))
+            },
             Setting::Other(setting) => SocketT::set_setting(file, setting, buf),
         }
     }
