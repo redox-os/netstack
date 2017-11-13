@@ -176,18 +176,19 @@ impl Smolnetd {
                     error!("poll error: {}", err);
                     break 0;
                 }
-                Ok(None) => {
-                    break ::std::u64::MAX;
-                }
-                Ok(Some(n)) if n > 0 => {
-                    break n;
-                }
+                Ok(wait_till) if self.input_queue.borrow().is_empty() => match wait_till {
+                    None => break ::std::i64::MAX,
+                    Some(n) if n > timestamp => {
+                        break ::std::cmp::min(::std::i64::MAX as u64, n - timestamp) as i64
+                    }
+                    _ => {}
+                },
                 _ => {}
             }
         };
         self.notify_sockets()?;
         Ok(::std::cmp::min(
-            ::std::cmp::max(Smolnetd::MIN_CHECK_TIMEOUT_MS, timeout as i64),
+            ::std::cmp::max(Smolnetd::MIN_CHECK_TIMEOUT_MS, timeout),
             Smolnetd::MAX_CHECK_TIMEOUT_MS,
         ))
     }
