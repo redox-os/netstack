@@ -16,6 +16,12 @@ use syscall;
 use error::{Error, Result};
 use super::{post_fevent, SocketSet};
 
+pub struct NullFile {
+    pub flags: usize,
+    pub uid: u32,
+    pub gid: u32,
+}
+
 pub struct SocketFile<DataT> {
     pub flags: usize,
     pub data: DataT,
@@ -146,6 +152,7 @@ where
     SocketT: SchemeSocket + AnySocket<'static, 'static>,
 {
     next_fd: usize,
+    nulls: BTreeMap<usize, NullFile>,
     files: BTreeMap<usize, SchemeFile<SocketT>>,
     socket_set: Rc<RefCell<SocketSet>>,
     scheme_file: File,
@@ -161,6 +168,7 @@ where
     pub fn new(socket_set: Rc<RefCell<SocketSet>>, scheme_file: File) -> SocketScheme<SocketT> {
         SocketScheme {
             next_fd: 1,
+            nulls: BTreeMap::new(),
             files: BTreeMap::new(),
             socket_set,
             scheme_data: SocketT::new_scheme_data(),
@@ -455,31 +463,50 @@ where
     fn open(&mut self, url: &[u8], flags: usize, uid: u32, _gid: u32) -> SyscallResult<usize> {
         let path = str::from_utf8(url).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
 
-        let (socket_handle, data) = SocketT::new_socket(
-            &mut self.socket_set.borrow_mut(),
-            path,
-            uid,
-            &mut self.scheme_data,
-        )?;
+        if path.is_empty() {
+            let null = NullFile {
+                flags: flags,
+                uid: uid,
+                gid: _gid,
+            };
 
-        let id = self.next_fd;
+            let id = self.next_fd;
+            self.next_fd += 1;
 
-        self.files.insert(
-            id,
-            SchemeFile::Socket(SocketFile {
+            self.nulls.insert(id, null);
+
+            Ok(id)
+        } else {
+            let (socket_handle, data) = SocketT::new_socket(
+                &mut self.socket_set.borrow_mut(),
+                path,
+                uid,
+                &mut self.scheme_data,
+            )?;
+
+            let file = SchemeFile::Socket(SocketFile {
                 flags,
                 events: 0,
                 socket_handle,
                 write_timeout: None,
                 read_timeout: None,
                 data,
-            }),
-        );
-        self.next_fd += 1;
-        Ok(id)
+            });
+
+            let id = self.next_fd;
+            self.next_fd += 1;
+
+            self.files.insert(id, file);
+
+            Ok(id)
+        }
     }
 
     fn close(&mut self, fd: usize) -> SyscallResult<usize> {
+        if let Some(_null) = self.nulls.remove(&fd) {
+            return Ok(0);
+        }
+
         let socket_handle = {
             let file = self.files
                 .get(&fd)
@@ -553,6 +580,12 @@ where
     }
 
     fn dup(&mut self, fd: usize, buf: &[u8]) -> SyscallResult<usize> {
+        if let Some((flags, uid, gid)) = self.nulls.get(&fd).map(|null| {
+            (null.flags, null.uid, null.gid)
+        }) {
+            return self.open(buf, flags, uid, gid);
+        }
+
         let path = str::from_utf8(buf).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
 
         let new_file = {
