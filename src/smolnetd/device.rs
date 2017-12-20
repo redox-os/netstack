@@ -5,8 +5,8 @@ use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
 
+use smoltcp::wire::EthernetAddress;
 use buffer_pool::{Buffer, BufferPool};
-use arp_cache::LOOPBACK_HWADDR;
 
 struct NetworkDeviceData {
     network_file: Rc<RefCell<File>>,
@@ -68,7 +68,7 @@ impl smoltcp::phy::TxToken for TxToken {
 
         let mut loopback = false;
         if let Ok(mut frame) = smoltcp::wire::EthernetFrame::new_checked(&mut buffer) {
-            if frame.dst_addr() == LOOPBACK_HWADDR {
+            if frame.dst_addr() == EthernetAddress::default() {
                 frame.set_dst_addr(data.local_hwaddr);
                 loopback = true;
             }

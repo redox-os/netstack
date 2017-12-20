@@ -1,9 +1,9 @@
 use netutils::getcfg;
-use smoltcp::iface::{ArpCache, EthernetInterface};
+use smoltcp::iface::{NeighborCache, EthernetInterface, EthernetInterfaceBuilder};
 use smoltcp::socket::SocketSet as SmoltcpSocketSet;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{VecDeque, BTreeMap};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::mem::size_of;
@@ -16,7 +16,6 @@ use syscall;
 use buffer_pool::{Buffer, BufferPool};
 use device::NetworkDevice;
 use error::{Error, Result};
-use arp_cache::LoArpCache;
 use self::ip::IpScheme;
 use self::tcp::TcpScheme;
 use self::udp::UdpScheme;
@@ -82,14 +81,12 @@ impl Smolnetd {
             hardware_addr,
             Rc::clone(&buffer_pool),
         );
-        let arp_cache = LoArpCache::new(protocol_addrs.iter().map(IpCidr::address));
-        let iface = EthernetInterface::new(
-            network_device,
-            Box::new(arp_cache) as Box<ArpCache>,
-            hardware_addr,
-            protocol_addrs,
-            Some(default_gw),
-        );
+        let iface = EthernetInterfaceBuilder::new(network_device)
+                .neighbor_cache(NeighborCache::new(BTreeMap::new()))
+                .ethernet_addr(hardware_addr)
+                .ip_addrs(protocol_addrs)
+                .ipv4_gateway(default_gw)
+                .finalize();
         let socket_set = Rc::new(RefCell::new(SocketSet::new(vec![])));
         Smolnetd {
             iface,
