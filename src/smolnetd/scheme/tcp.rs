@@ -26,12 +26,12 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         self.can_recv()
     }
 
-    fn ttl(&self) -> u8 {
-        self.ttl().unwrap_or(64)
+    fn hop_limit(&self) -> u8 {
+        self.hop_limit().unwrap_or(64)
     }
 
-    fn set_ttl(&mut self, ttl: u8) {
-        self.set_ttl(Some(ttl));
+    fn set_hop_limit(&mut self, hop_limit: u8) {
+        self.set_hop_limit(Some(hop_limit));
     }
 
     fn get_setting(

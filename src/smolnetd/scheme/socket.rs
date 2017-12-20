@@ -118,8 +118,8 @@ where
     fn can_send(&self) -> bool;
     fn can_recv(&self) -> bool;
 
-    fn ttl(&self) -> u8;
-    fn set_ttl(&mut self, u8);
+    fn hop_limit(&self) -> u8;
+    fn set_hop_limit(&mut self, u8);
 
     fn get_setting(&SocketFile<Self::DataT>, Self::SettingT, &mut [u8]) -> SyscallResult<usize>;
     fn set_setting(&mut SocketFile<Self::DataT>, Self::SettingT, &[u8]) -> SyscallResult<usize>;
@@ -375,10 +375,10 @@ where
 
         match setting {
             Setting::Other(setting) => SocketT::get_setting(file, setting, buf),
-            Setting::Ttl => if let Some(ttl) = buf.get_mut(0) {
+            Setting::Ttl => if let Some(hop_limit) = buf.get_mut(0) {
                 let mut socket_set = self.socket_set.borrow_mut();
                 let socket = socket_set.get::<SocketT>(file.socket_handle);
-                *ttl = socket.ttl();
+                *hop_limit = socket.hop_limit();
                 Ok(1)
             } else {
                 Err(SyscallError::new(syscall::EIO))
@@ -443,10 +443,10 @@ where
                 };
                 Ok(count)
             }
-            Setting::Ttl => if let Some(ttl) = buf.get(0) {
+            Setting::Ttl => if let Some(hop_limit) = buf.get(0) {
                 let mut socket_set = self.socket_set.borrow_mut();
                 let mut socket = socket_set.get::<SocketT>(file.socket_handle);
-                socket.set_ttl(*ttl);
+                socket.set_hop_limit(*hop_limit);
                 Ok(1)
             } else {
                 Err(SyscallError::new(syscall::EIO))
@@ -596,7 +596,7 @@ where
             let socket_handle = file.socket_handle();
 
             let (new_handle, update_with) = match path {
-                "ttl" => (
+                "hop_limit" => (
                     SchemeFile::Setting(SettingFile {
                         socket_handle,
                         fd,
