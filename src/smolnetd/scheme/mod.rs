@@ -1,4 +1,5 @@
 use netutils::getcfg;
+use smoltcp;
 use smoltcp::iface::{NeighborCache, EthernetInterface, EthernetInterfaceBuilder};
 use smoltcp::socket::SocketSet as SmoltcpSocketSet;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
@@ -166,24 +167,23 @@ impl Smolnetd {
                 break 0;
             }
             let timestamp = self.get_timestamp();
-            match self.iface
-                .poll(&mut *self.socket_set.borrow_mut(), timestamp)
-            {
-                Err(err) => {
-                    error!("poll error: {}", err);
-                    break 0;
+            match self.iface.poll(&mut *self.socket_set.borrow_mut(), timestamp) {
+                Ok(_) => (),
+                Err(smoltcp::Error::Unrecognized) => (),
+                Err(e) => {
+                    error!("poll error: {}", e);
+                    break 0
                 }
-                Ok(wait_till) if self.input_queue.borrow().is_empty() => match wait_till {
-                    None => break ::std::i64::MAX,
-                    Some(n) if n > timestamp => {
-                        break ::std::cmp::min(::std::i64::MAX as u64, n - timestamp) as i64
-                    }
-                    _ => {}
+            }
+            self.notify_sockets()?;
+            match self.iface.poll_at(&*self.socket_set.borrow(), timestamp) {
+                Some(n) if n > timestamp => {
+                    break ::std::cmp::min(::std::i64::MAX as u64, n - timestamp) as i64
                 },
-                _ => {}
+                Some(_) => {},
+                None => break ::std::i64::MAX
             }
         };
-        self.notify_sockets()?;
         Ok(::std::cmp::min(
             ::std::cmp::max(Smolnetd::MIN_CHECK_TIMEOUT_MS, timeout),
             Smolnetd::MAX_CHECK_TIMEOUT_MS,
