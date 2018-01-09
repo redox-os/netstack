@@ -1,10 +1,10 @@
 use netutils::getcfg;
 use smoltcp;
-use smoltcp::iface::{NeighborCache, EthernetInterface, EthernetInterfaceBuilder};
+use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache};
 use smoltcp::socket::SocketSet as SmoltcpSocketSet;
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
 use std::cell::RefCell;
-use std::collections::{VecDeque, BTreeMap};
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::mem::size_of;
@@ -21,20 +21,23 @@ use self::ip::IpScheme;
 use self::tcp::TcpScheme;
 use self::udp::UdpScheme;
 use self::icmp::IcmpScheme;
+use self::netcfg::NetCfgScheme;
 
 mod ip;
 mod socket;
 mod tcp;
 mod udp;
 mod icmp;
+mod netcfg;
 
 type SocketSet = SmoltcpSocketSet<'static, 'static, 'static>;
+type Interface = Rc<RefCell<EthernetInterface<'static, 'static, NetworkDevice>>>;
 
 pub struct Smolnetd {
     network_file: Rc<RefCell<File>>,
     time_file: File,
 
-    iface: EthernetInterface<'static, 'static, NetworkDevice>,
+    iface: Interface,
     socket_set: Rc<RefCell<SocketSet>>,
 
     startup_time: Instant,
@@ -43,6 +46,7 @@ pub struct Smolnetd {
     udp_scheme: UdpScheme,
     tcp_scheme: TcpScheme,
     icmp_scheme: IcmpScheme,
+    netcfg_scheme: NetCfgScheme,
 
     input_queue: Rc<RefCell<VecDeque<Buffer>>>,
     buffer_pool: Rc<RefCell<BufferPool>>,
@@ -61,6 +65,7 @@ impl Smolnetd {
         tcp_file: File,
         icmp_file: File,
         time_file: File,
+        netcfg_file: File,
     ) -> Smolnetd {
         let hardware_addr = EthernetAddress::from_str(getcfg("mac").unwrap().trim())
             .expect("Can't parse the 'mac' cfg");
@@ -83,14 +88,15 @@ impl Smolnetd {
             Rc::clone(&buffer_pool),
         );
         let iface = EthernetInterfaceBuilder::new(network_device)
-                .neighbor_cache(NeighborCache::new(BTreeMap::new()))
-                .ethernet_addr(hardware_addr)
-                .ip_addrs(protocol_addrs)
-                .ipv4_gateway(default_gw)
-                .finalize();
+            .neighbor_cache(NeighborCache::new(BTreeMap::new()))
+            .ethernet_addr(hardware_addr)
+            .ip_addrs(protocol_addrs)
+            .ipv4_gateway(default_gw)
+            .finalize();
+        let iface = Rc::new(RefCell::new(iface));
         let socket_set = Rc::new(RefCell::new(SocketSet::new(vec![])));
         Smolnetd {
-            iface,
+            iface: Rc::clone(&iface),
             socket_set: Rc::clone(&socket_set),
             startup_time: Instant::now(),
             time_file,
@@ -98,6 +104,7 @@ impl Smolnetd {
             udp_scheme: UdpScheme::new(Rc::clone(&socket_set), udp_file),
             tcp_scheme: TcpScheme::new(Rc::clone(&socket_set), tcp_file),
             icmp_scheme: IcmpScheme::new(Rc::clone(&socket_set), icmp_file),
+            netcfg_scheme: NetCfgScheme::new(Rc::clone(&iface), netcfg_file),
             input_queue,
             network_file,
             buffer_pool,
@@ -141,6 +148,11 @@ impl Smolnetd {
         Ok(None)
     }
 
+    pub fn on_netcfg_scheme_event(&mut self) -> Result<Option<()>> {
+        self.netcfg_scheme.on_scheme_event()?;
+        Ok(None)
+    }
+
     fn schedule_time_event(&mut self, timeout: i64) -> Result<()> {
         let mut time = TimeSpec::default();
         if self.time_file.read(&mut time)? < size_of::<TimeSpec>() {
@@ -160,30 +172,34 @@ impl Smolnetd {
     }
 
     fn poll(&mut self) -> Result<i64> {
-        let mut iter_limit = 10usize;
-        let timeout = loop {
-            iter_limit -= 1;
-            if iter_limit == 0 {
-                break 0;
-            }
+        let timeout = {
+            let mut iter_limit = 10usize;
+            let mut iface = self.iface.borrow_mut();
+            let mut socket_set = self.socket_set.borrow_mut();
             let timestamp = self.get_timestamp();
-            match self.iface.poll(&mut *self.socket_set.borrow_mut(), timestamp) {
-                Ok(_) => (),
-                Err(smoltcp::Error::Unrecognized) => (),
-                Err(e) => {
-                    error!("poll error: {}", e);
-                    break 0
+            loop {
+                if iter_limit == 0 {
+                    break 0;
+                }
+                iter_limit -= 1;
+                match iface.poll(&mut socket_set, timestamp) {
+                    Ok(_) => (),
+                    Err(smoltcp::Error::Unrecognized) => (),
+                    Err(e) => {
+                        error!("poll error: {}", e);
+                        break 0
+                    }
+                }
+                match iface.poll_at(&socket_set, timestamp) {
+                    Some(n) if n > timestamp => {
+                        break ::std::cmp::min(::std::i64::MAX as u64, n - timestamp) as i64
+                    },
+                    Some(_) => {},
+                    None => break ::std::i64::MAX
                 }
             }
-            self.notify_sockets()?;
-            match self.iface.poll_at(&*self.socket_set.borrow(), timestamp) {
-                Some(n) if n > timestamp => {
-                    break ::std::cmp::min(::std::i64::MAX as u64, n - timestamp) as i64
-                },
-                Some(_) => {},
-                None => break ::std::i64::MAX
-            }
         };
+        self.notify_sockets()?;
         Ok(::std::cmp::min(
             ::std::cmp::max(Smolnetd::MIN_CHECK_TIMEOUT_MS, timeout),
             Smolnetd::MAX_CHECK_TIMEOUT_MS,
@@ -197,9 +213,7 @@ impl Smolnetd {
             let count = self.network_file
                 .borrow_mut()
                 .read(&mut buffer)
-                .map_err(|e| {
-                    Error::from_io_error(e, "Failed to read from network file")
-                })?;
+                .map_err(|e| Error::from_io_error(e, "Failed to read from network file"))?;
             if count == 0 {
                 break;
             }
