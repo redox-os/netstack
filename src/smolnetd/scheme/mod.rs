@@ -187,15 +187,15 @@ impl Smolnetd {
                     Err(smoltcp::Error::Unrecognized) => (),
                     Err(e) => {
                         error!("poll error: {}", e);
-                        break 0
+                        break 0;
                     }
                 }
                 match iface.poll_at(&socket_set, timestamp) {
                     Some(n) if n > timestamp => {
                         break ::std::cmp::min(::std::i64::MAX as u64, n - timestamp) as i64
-                    },
-                    Some(_) => {},
-                    None => break ::std::i64::MAX
+                    }
+                    Some(_) => {}
+                    None => break ::std::i64::MAX,
                 }
             }
         };

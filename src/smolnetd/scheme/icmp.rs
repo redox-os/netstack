@@ -92,8 +92,10 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                     tx_packets.push(IcmpPacketBuffer::new(vec![0; NetworkDevice::MTU]));
                 }
 
-                let socket = IcmpSocket::new(IcmpSocketBuffer::new(rx_packets),
-                                             IcmpSocketBuffer::new(tx_packets));
+                let socket = IcmpSocket::new(
+                    IcmpSocketBuffer::new(rx_packets),
+                    IcmpSocketBuffer::new(tx_packets),
+                );
                 let handle = socket_set.add(socket);
                 let mut icmp_socket = socket_set.get::<IcmpSocket>(handle);
                 let ident = ident_set
