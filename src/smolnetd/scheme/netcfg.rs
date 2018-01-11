@@ -1,3 +1,4 @@
+// use managed::ManagedSlice;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -5,8 +6,7 @@ use std::io::{Read, Write};
 use std::str;
 use std::str::FromStr;
 use std::rc::Rc;
-use std::iter::FromIterator;
-use smoltcp::wire::{EthernetAddress, Ipv4Address};
+use smoltcp::wire::{EthernetAddress, IpCidr, Ipv4Address};
 use syscall::data::Stat;
 use syscall::flag::{MODE_DIR, MODE_FILE};
 use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
@@ -32,11 +32,11 @@ trait CfgNode {
         true
     }
 
-    fn read(&self) -> Vec<u8> {
-        vec![]
+    fn read(&self) -> String {
+        String::new()
     }
 
-    fn write(&self, _buf: &[u8]) -> SyscallResult<usize> {
+    fn write(&self, _buf: &str) -> SyscallResult<usize> {
         Ok(0)
     }
 
@@ -47,23 +47,23 @@ trait CfgNode {
 
 struct RONode<F>
 where
-    F: Fn() -> Vec<u8>,
+    F: Fn() -> String,
 {
     read_fun: F,
 }
 
 impl<F> CfgNode for RONode<F>
 where
-    F: Fn() -> Vec<u8>,
+    F: Fn() -> String,
 {
-    fn read(&self) -> Vec<u8> {
+    fn read(&self) -> String {
         (self.read_fun)()
     }
 }
 
 impl<F> RONode<F>
 where
-    F: 'static + Fn() -> Vec<u8>,
+    F: 'static + Fn() -> String,
 {
     fn new(read_fun: F) -> CfgNodeRef {
         Rc::new(RefCell::new(RONode { read_fun }))
@@ -72,16 +72,16 @@ where
 
 struct WONode<F>
 where
-    F: Fn(&[u8]) -> SyscallResult<usize>,
+    F: Fn(&str) -> SyscallResult<usize>,
 {
     write_fun: F,
 }
 
 impl<F> CfgNode for WONode<F>
 where
-    F: Fn(&[u8]) -> SyscallResult<usize>,
+    F: Fn(&str) -> SyscallResult<usize>,
 {
-    fn write(&self, buf: &[u8]) -> SyscallResult<usize> {
+    fn write(&self, buf: &str) -> SyscallResult<usize> {
         (self.write_fun)(buf)
     }
 
@@ -92,7 +92,7 @@ where
 
 impl<F> WONode<F>
 where
-    F: 'static + Fn(&[u8]) -> SyscallResult<usize>,
+    F: 'static + Fn(&str) -> SyscallResult<usize>,
 {
     fn new(write_fun: F) -> CfgNodeRef {
         Rc::new(RefCell::new(WONode { write_fun }))
@@ -101,8 +101,8 @@ where
 
 struct RWNode<F, G>
 where
-    F: Fn() -> Vec<u8>,
-    G: Fn(&[u8]) -> SyscallResult<usize>,
+    F: Fn() -> String,
+    G: Fn(&str) -> SyscallResult<usize>,
 {
     read_fun: F,
     write_fun: G,
@@ -110,14 +110,14 @@ where
 
 impl<F, G> CfgNode for RWNode<F, G>
 where
-    F: Fn() -> Vec<u8>,
-    G: Fn(&[u8]) -> SyscallResult<usize>,
+    F: Fn() -> String,
+    G: Fn(&str) -> SyscallResult<usize>,
 {
-    fn read(&self) -> Vec<u8> {
+    fn read(&self) -> String {
         (self.read_fun)()
     }
 
-    fn write(&self, buf: &[u8]) -> SyscallResult<usize> {
+    fn write(&self, buf: &str) -> SyscallResult<usize> {
         (self.write_fun)(buf)
     }
 
@@ -128,8 +128,8 @@ where
 
 impl<F, G> RWNode<F, G>
 where
-    F: 'static + Fn() -> Vec<u8>,
-    G: 'static + Fn(&[u8]) -> SyscallResult<usize>,
+    F: 'static + Fn() -> String,
+    G: 'static + Fn(&str) -> SyscallResult<usize>,
 {
     fn new(read_fun: F, write_fun: G) -> CfgNodeRef {
         Rc::new(RefCell::new(RWNode {
@@ -148,13 +148,13 @@ impl CfgNode for StaticDirNode {
         true
     }
 
-    fn read(&self) -> Vec<u8> {
-        let mut files = vec![];
+    fn read(&self) -> String {
+        let mut files = String::new();
         for child in self.child_nodes.keys() {
             if !files.is_empty() {
-                files.push(b'\n');
+                files.push('\n');
             }
-            files.extend(child.bytes());
+            files += child;
         }
         files
     }
@@ -170,8 +170,45 @@ impl StaticDirNode {
     }
 }
 
-fn parse_default_gw(buf: &[u8]) -> SyscallResult<Ipv4Address> {
-    let value = str::from_utf8(buf).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
+macro_rules! cfg_node {
+    (val $e:expr) => {
+        $e
+    };
+    (ro [ $($c:ident)* ] || $b:block ) => {
+        {
+            $(let $c = $c.clone();)*
+            RONode::new(move|| $b)
+        }
+    };
+    (wo [ $($c:ident)* ] |$i:ident| $b:block ) => {
+        {
+            $(let $c = $c.clone();)*
+            WONode::new(move |$i: &str| $b)
+        }
+    };
+    (rw [ $($c:ident)* ] || $rb:block |$i:ident| $wb:block ) => {
+        {
+            let read_fun = {
+                $(let $c = $c.clone();)*
+                move || $rb
+            };
+            let write_fun = {
+                $(let $c = $c.clone();)*
+                move |$i: &str| $wb
+            };
+            RWNode::new(read_fun, write_fun)
+        }
+    };
+    ($($e:expr => { $($t:tt)* }),* $(,)*) => {
+        {
+            let mut children = BTreeMap::new();
+            $(children.insert($e.into(), cfg_node!($($t)*));)*
+            StaticDirNode::new(children)
+        }
+    };
+}
+
+fn parse_default_gw(value: &str) -> SyscallResult<Ipv4Address> {
     let mut routes = value.lines();
     if let Some(route) = routes.next() {
         if !routes.next().is_none() {
@@ -190,71 +227,110 @@ fn parse_default_gw(buf: &[u8]) -> SyscallResult<Ipv4Address> {
     Err(SyscallError::new(syscall::EINVAL))
 }
 
-fn mk_route_node(iface: &Interface) -> CfgNodeRef {
-    let iface_ = Rc::clone(iface);
-    let route_list_node = RONode::new(move || {
-        let default_route = if let Some(ip) = iface_.borrow().ipv4_gateway() {
-            format!("default via {}\n", ip)
-        } else {
-            String::new()
-        };
-        Vec::from_iter(default_route.bytes())
-    });
-    let iface_ = Rc::clone(iface);
-    let route_add_node = WONode::new(move |buf: &[u8]| -> SyscallResult<usize> {
-        let default_gw = parse_default_gw(buf)?;
-        iface_.borrow_mut().set_ipv4_gateway(Some(default_gw));
-        Ok(0)
-    });
-    let iface_ = Rc::clone(iface);
-    let route_rm_node = WONode::new(move |buf: &[u8]| -> SyscallResult<usize> {
-        let default_gw = parse_default_gw(buf)?;
-        let mut iface = iface_.borrow_mut();
-        if iface.ipv4_gateway() != Some(default_gw) {
-            return Err(SyscallError::new(syscall::EINVAL));
-        }
-        iface.set_ipv4_gateway(None);
-        Ok(0)
-    });
-    let mut route_child_nodes = BTreeMap::new();
-    route_child_nodes.insert("list".to_owned(), route_list_node);
-    route_child_nodes.insert("add".to_owned(), route_add_node);
-    route_child_nodes.insert("rm".to_owned(), route_rm_node);
-    StaticDirNode::new(route_child_nodes)
-}
-
-fn mk_iface_node(iface: &Interface) -> CfgNodeRef {
-    let iface_ = Rc::clone(iface);
-    let iface__ = Rc::clone(iface);
-    let iface_mac_node = RWNode::new(
-        move || Vec::from_iter(format!("{}\n", iface_.borrow().ethernet_addr()).bytes()),
-        move |buf: &[u8]| -> SyscallResult<usize> {
-            let value = str::from_utf8(buf).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
-            let mac =
-                EthernetAddress::from_str(value).map_err(|_| SyscallError::new(syscall::EINVAL))?;
-            if !mac.is_unicast() {
-                return Err(SyscallError::new(syscall::EINVAL));
-            }
-            iface__.borrow_mut().set_ethernet_addr(mac);
-            Ok(0)
-        },
-    );
-    let mut iface_child_nodes = BTreeMap::new();
-    iface_child_nodes.insert("mac".to_owned(), iface_mac_node);
-    StaticDirNode::new(iface_child_nodes)
-}
-
 fn mk_root_node(iface: Interface) -> CfgNodeRef {
-    let route_node = mk_route_node(&iface);
-    let mut ifaces_nodes = BTreeMap::new();
-
-    ifaces_nodes.insert("eth0".to_owned(), mk_iface_node(&iface));
-    let ifaces_node = StaticDirNode::new(ifaces_nodes);
-
-    let mut root_child_nodes = BTreeMap::new();
-    root_child_nodes.insert("route".to_owned(), route_node);
-    root_child_nodes.insert("ifaces".to_owned(), ifaces_node);
-    StaticDirNode::new(root_child_nodes)
+    cfg_node!{
+        "route" => {
+            "list" => {
+                ro [iface] || {
+                    if let Some(ip) = iface.borrow().ipv4_gateway() {
+                        format!("default via {}\n", ip)
+                    } else {
+                        String::new()
+                    }
+                }
+            },
+            "add" => {
+                wo [iface] |routes| {
+                    let default_gw = parse_default_gw(routes)?;
+                    iface.borrow_mut().set_ipv4_gateway(Some(default_gw));
+                    Ok(0)
+                }
+            },
+            "rm" => {
+                wo [iface] |routes| {
+                    let default_gw = parse_default_gw(routes)?;
+                    let mut iface = iface.borrow_mut();
+                    if iface.ipv4_gateway() != Some(default_gw) {
+                        return Err(SyscallError::new(syscall::EINVAL));
+                    }
+                    iface.set_ipv4_gateway(None);
+                    Ok(0)
+                }
+            }
+        },
+        "ifaces" => {
+            "eth0" => {
+                "mac" => {
+                    rw [iface]
+                    || {
+                        format!("{}\n", iface.borrow().ethernet_addr())
+                    }
+                    |mac| {
+                        let mac = mac.lines().next()
+                            .ok_or_else(|| SyscallError::new(syscall::EINVAL))?;
+                        let mac = EthernetAddress::from_str(mac).
+                            map_err(|_| SyscallError::new(syscall::EINVAL))?;
+                        if !mac.is_unicast() {
+                            return Err(SyscallError::new(syscall::EINVAL));
+                        }
+                        iface.borrow_mut().set_ethernet_addr(mac);
+                        Ok(0)
+                    }
+                },
+                "addr" => {
+                    "list" => {
+                        ro [iface] || {
+                            let mut ips = String::new();
+                            for cidr in iface.borrow().ip_addrs() {
+                                ips += &format!("{}\n", cidr);
+                            }
+                            ips
+                        }
+                    },
+                    "add" => {
+                        wo [iface] |input| {
+                            let mut iface = iface.borrow_mut();
+                            let mut cidrs = iface.ip_addrs().iter().cloned().collect::<Vec<_>>();
+                            for cidr in input.lines() {
+                                let cidr = IpCidr::from_str(cidr)
+                                    .map_err(|_| SyscallError::new(syscall::EINVAL))?;
+                                if !cidr.address().is_unicast() {
+                                    return Err(SyscallError::new(syscall::EINVAL));
+                                }
+                                cidrs.insert(0, cidr);
+                            }
+                            iface.update_ip_addrs(|s| {
+                                *s = From::from(cidrs);
+                            });
+                            Ok(0)
+                        }
+                    },
+                    "rm" => {
+                        wo [iface] |input| {
+                            let mut iface = iface.borrow_mut();
+                            let mut cidrs = iface.ip_addrs().iter().cloned().collect::<Vec<_>>();
+                            for cidr in input.lines() {
+                                let cidr = IpCidr::from_str(cidr)
+                                    .map_err(|_| SyscallError::new(syscall::EINVAL))?;
+                                if !cidr.address().is_unicast() {
+                                    return Err(SyscallError::new(syscall::EINVAL));
+                                }
+                                let pre_retain_len = cidrs.len();
+                                cidrs.retain(|&c| c != cidr);
+                                if pre_retain_len == cidrs.len() {
+                                    return Err(SyscallError::new(syscall::EINVAL));
+                                }
+                            }
+                            iface.update_ip_addrs(|s| {
+                                *s = From::from(cidrs);
+                            });
+                            Ok(0)
+                        }
+                    },
+                }
+            }
+        }
+    }
 }
 
 struct NetCfgFile {
@@ -309,7 +385,7 @@ impl SchemeMut for NetCfgScheme {
                 .ok_or_else(|| SyscallError::new(syscall::EINVAL))?;
             current_node = next_node;
         }
-        let read_buf = current_node.borrow().read();
+        let read_buf = Vec::from(current_node.borrow().read());
         let fd = self.next_fd;
         self.next_fd += 1;
         self.files.insert(
@@ -329,7 +405,9 @@ impl SchemeMut for NetCfgScheme {
         let file = self.files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
-        file.cfg_node.borrow().write(&file.write_buf)
+        let value =
+            str::from_utf8(&file.write_buf).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
+        file.cfg_node.borrow().write(&value)
     }
 
     fn write(&mut self, fd: usize, buf: &[u8]) -> SyscallResult<usize> {

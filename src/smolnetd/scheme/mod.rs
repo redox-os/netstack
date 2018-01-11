@@ -71,7 +71,7 @@ impl Smolnetd {
             .expect("Can't parse the 'mac' cfg");
         let local_ip =
             IpAddress::from_str(getcfg("ip").unwrap().trim()).expect("Can't parse the 'ip' cfg.");
-        let protocol_addrs = [
+        let protocol_addrs = vec![
             IpCidr::new(local_ip, 24),
             IpCidr::new(IpAddress::v4(127, 0, 0, 1), 8),
         ];
