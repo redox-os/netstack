@@ -402,12 +402,13 @@ impl SchemeMut for NetCfgScheme {
     }
 
     fn close(&mut self, fd: usize) -> SyscallResult<usize> {
-        let file = self.files
-            .get_mut(&fd)
-            .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
-        let value =
-            str::from_utf8(&file.write_buf).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
-        file.cfg_node.borrow().write(&value)
+        if let Some(file) = self.files.remove(&fd) {
+            let value = str::from_utf8(&file.write_buf)
+                .or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
+            file.cfg_node.borrow().write(&value)
+        } else {
+            Err(SyscallError::new(syscall::EBADF))
+        }
     }
 
     fn write(&mut self, fd: usize, buf: &[u8]) -> SyscallResult<usize> {
