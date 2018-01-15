@@ -4,6 +4,7 @@ extern crate event;
 #[macro_use]
 extern crate log;
 extern crate netutils;
+extern crate redox_netstack;
 extern crate smoltcp;
 extern crate syscall;
 extern crate byteorder;
@@ -14,14 +15,13 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
 
-use error::{Error, Result};
+use redox_netstack::error::{Error, Result};
+use redox_netstack::logger;
 use event::EventQueue;
 use scheme::Smolnetd;
 
 mod buffer_pool;
 mod device;
-mod error;
-mod logger;
 mod port_set;
 mod scheme;
 

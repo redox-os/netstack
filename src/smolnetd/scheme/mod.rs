@@ -16,7 +16,7 @@ use syscall;
 
 use buffer_pool::{Buffer, BufferPool};
 use device::NetworkDevice;
-use error::{Error, Result};
+use redox_netstack::error::{Error, Result};
 use self::ip::IpScheme;
 use self::tcp::TcpScheme;
 use self::udp::UdpScheme;

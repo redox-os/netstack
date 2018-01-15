@@ -3,14 +3,23 @@ name = "redox_netstack"
 version = "0.1.0"
 
 [[bin]]
+name = "dnsd"
+path = "src/dnsd/main.rs"
+
+[[bin]]
 name = "smolnetd"
 path = "src/smolnetd/main.rs"
 
+[lib]
+name = "redox_netstack"
+path = "src/lib/lib.rs"
+
 [dependencies]
 netutils = { git = "https://github.com/redox-os/netutils.git" }
-redox_event = { git = "https://github.com/redox-os/event.git" }
+redox_event = { git = "https://github.com/batonius/event.git", branch = "default_callback" }
 redox_syscall = { git = "https://github.com/redox-os/syscall.git" }
 byteorder = { version = "1.0", default-features = false }
+dns-parser = "0.7.1"
 
 [dependencies.log]
 version = "0.3"
