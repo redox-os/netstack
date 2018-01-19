@@ -27,7 +27,10 @@ default-features = false
 features = ["release_max_level_off"]
 
 [dependencies.smoltcp]
-git = "https://github.com/m-labs/smoltcp.git"
+path = "../smoltcp"
+# git = "https://github.com/m-labs/smoltcp.git"
+# git = "https://github.com/batonius/smoltcp.git"
+branch = "unspecified_src"
 default-features = false
 features = ["std", "socket-raw", "proto-ipv4", "socket-udp", "socket-tcp", "socket-icmp"]
 

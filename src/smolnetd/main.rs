@@ -88,9 +88,7 @@ fn run() -> Result<()> {
         .add(network_fd, move |_| {
             smolnetd_.borrow_mut().on_network_scheme_event()
         })
-        .map_err(|e| {
-            Error::from_io_error(e, "failed to listen to network events")
-        })?;
+        .map_err(|e| Error::from_io_error(e, "failed to listen to network events"))?;
 
     let smolnetd_ = Rc::clone(&smolnetd);
 
@@ -101,24 +99,18 @@ fn run() -> Result<()> {
     let smolnetd_ = Rc::clone(&smolnetd);
 
     event_queue
-        .add(
-            udp_fd,
-            move |_| smolnetd_.borrow_mut().on_udp_scheme_event(),
-        )
-        .map_err(|e| {
-            Error::from_io_error(e, "failed to listen to udp events")
-        })?;
+        .add(udp_fd, move |_| {
+            smolnetd_.borrow_mut().on_udp_scheme_event()
+        })
+        .map_err(|e| Error::from_io_error(e, "failed to listen to udp events"))?;
 
     let smolnetd_ = Rc::clone(&smolnetd);
 
     event_queue
-        .add(
-            tcp_fd,
-            move |_| smolnetd_.borrow_mut().on_tcp_scheme_event(),
-        )
-        .map_err(|e| {
-            Error::from_io_error(e, "failed to listen to tcp events")
-        })?;
+        .add(tcp_fd, move |_| {
+            smolnetd_.borrow_mut().on_tcp_scheme_event()
+        })
+        .map_err(|e| Error::from_io_error(e, "failed to listen to tcp events"))?;
 
     let smolnetd_ = Rc::clone(&smolnetd);
 
@@ -126,15 +118,11 @@ fn run() -> Result<()> {
         .add(icmp_fd, move |_| {
             smolnetd_.borrow_mut().on_icmp_scheme_event()
         })
-        .map_err(|e| {
-            Error::from_io_error(e, "failed to listen to icmp events")
-        })?;
+        .map_err(|e| Error::from_io_error(e, "failed to listen to icmp events"))?;
 
     event_queue
         .add(time_fd, move |_| smolnetd.borrow_mut().on_time_event())
-        .map_err(|e| {
-            Error::from_io_error(e, "failed to listen to time events")
-        })?;
+        .map_err(|e| Error::from_io_error(e, "failed to listen to time events"))?;
 
     event_queue.trigger_all(0)?;
 

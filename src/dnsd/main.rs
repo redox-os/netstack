@@ -46,8 +46,7 @@ fn run() -> Result<()> {
 
     let dnsd_ = Rc::clone(&dnsd);
 
-    event_queue
-        .set_default_callback(move |fd, _| dnsd_.borrow_mut().on_unknown_fd_event(fd));
+    event_queue.set_default_callback(move |fd, _| dnsd_.borrow_mut().on_unknown_fd_event(fd));
 
     event_queue
         .add(time_fd, move |_| dnsd.borrow_mut().on_time_event())
@@ -59,7 +58,8 @@ fn run() -> Result<()> {
 }
 
 fn main() {
-    if unsafe { syscall::clone(0).unwrap() } == 0 {
+    // if unsafe { syscall::clone(0).unwrap() } == 0
+    {
         logger::init_logger();
         if let Err(err) = run() {
             error!("dnsd: {}", err);
