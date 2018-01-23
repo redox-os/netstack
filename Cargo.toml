@@ -10,6 +10,7 @@ path = "src/smolnetd/main.rs"
 netutils = { git = "https://github.com/redox-os/netutils.git" }
 redox_event = { git = "https://github.com/redox-os/event.git" }
 redox_syscall = { git = "https://github.com/redox-os/syscall.git" }
+byteorder = { version = "1.0", default-features = false }
 
 [dependencies.log]
 version = "0.3"

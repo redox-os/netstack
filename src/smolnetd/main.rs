@@ -6,6 +6,7 @@ extern crate log;
 extern crate netutils;
 extern crate smoltcp;
 extern crate syscall;
+extern crate byteorder;
 
 use std::cell::RefCell;
 use std::fs::File;
