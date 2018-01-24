@@ -265,6 +265,7 @@ dependencies = [
 name = "redox_netstack"
 version = "0.1.0"
 dependencies = [
+ "byteorder 1.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "log 0.3.9 (registry+https://github.com/rust-lang/crates.io-index)",
  "netutils 0.1.0 (git+https://github.com/redox-os/netutils.git)",
  "redox_event 0.1.0 (git+https://github.com/redox-os/event.git)",

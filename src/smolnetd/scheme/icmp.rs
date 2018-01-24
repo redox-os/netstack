@@ -4,6 +4,7 @@ use std::mem;
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
+use byteorder::{ByteOrder, NetworkEndian};
 
 use device::NetworkDevice;
 use port_set::PortSet;
@@ -135,8 +136,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                         return Err(SyscallError::new(syscall::EINVAL));
                     }
                     let (seq_buf, payload) = buf.split_at(mem::size_of::<u16>());
-                    // Don't really care about endianness here as long as it's consistent with read
-                    let seq_no: u16 = u16::from(seq_buf[0]) | (u16::from(seq_buf[1]) << 8);
+                    let seq_no = NetworkEndian::read_u16(seq_buf);
                     let icmp_repr = Icmpv4Repr::EchoRequest {
                         ident: file.data.ident,
                         seq_no,
@@ -173,10 +173,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 if buf.len() < mem::size_of::<u16>() + data.len() {
                     return Err(SyscallError::new(syscall::EINVAL));
                 }
-
-                // Don't really care about endianness here as long as it's consistent with read
-                buf[0] = (seq_no & 0xff) as u8;
-                buf[1] = (seq_no >> 8) as u8;
+                NetworkEndian::write_u16(&mut buf[0..2], seq_no);
 
                 for i in 0..data.len() {
                     buf[mem::size_of::<u16>() + i] = data[i];
