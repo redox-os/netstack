@@ -13,7 +13,7 @@ use syscall::data::TimeSpec;
 use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
 use syscall;
 
-use error::{Error, Result};
+use redox_netstack::error::{Error, Result};
 use super::{post_fevent, SocketSet};
 
 pub struct NullFile {
