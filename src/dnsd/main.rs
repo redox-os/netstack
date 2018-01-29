@@ -31,7 +31,18 @@ fn run() -> Result<()> {
         .map_err(|e| Error::from_syscall_error(e, "failed to open time:"))?
         as RawFd;
 
-    let (dns_file, time_file) = unsafe { (File::from_raw_fd(dns_fd), File::from_raw_fd(time_fd)) };
+    let nameserver_fd = syscall::open(
+        "netcfg:resolv/nameserver",
+        syscall::O_RDWR | syscall::O_CREAT | syscall::O_NONBLOCK,
+    ).map_err(|e| Error::from_syscall_error(e, "failed to open nameserver:"))?
+        as RawFd;
+
+    let (dns_file, time_file) = unsafe {
+        (
+            File::from_raw_fd(dns_fd),
+            File::from_raw_fd(time_fd),
+        )
+    };
 
     let dnsd = Rc::new(RefCell::new(Dnsd::new(dns_file, time_file)));
 
@@ -43,6 +54,12 @@ fn run() -> Result<()> {
     event_queue
         .add(dns_fd, move |_| dnsd_.borrow_mut().on_dns_file_event())
         .map_err(|e| Error::from_io_error(e, "failed to listen to time events"))?;
+
+    let dnsd_ = Rc::clone(&dnsd);
+
+    event_queue
+        .add(nameserver_fd, move |_| dnsd_.borrow_mut().on_nameserver_event())
+        .map_err(|e| Error::from_io_error(e, "failed to listen to nameserver"))?;
 
     let dnsd_ = Rc::clone(&dnsd);
 

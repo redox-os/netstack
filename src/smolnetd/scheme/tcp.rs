@@ -65,8 +65,8 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             return Err(SyscallError::new(syscall::EACCES));
         }
 
-        let rx_packets = vec![0; 65_535];
-        let tx_packets = vec![0; 65_535];
+        let rx_packets = vec![0; 0xffff];
+        let tx_packets = vec![0; 0xffff];
         let rx_buffer = TcpSocketBuffer::new(rx_packets);
         let tx_buffer = TcpSocketBuffer::new(tx_packets);
         let socket = TcpSocket::new(rx_buffer, tx_buffer);
@@ -164,8 +164,8 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                 trace!("TCP creating new listening socket");
                 let new_handle = SchemeFile::Socket(tcp_handle.clone_with_data(()));
 
-                let rx_packets = vec![0; 65_535];
-                let tx_packets = vec![0; 65_535];
+                let rx_packets = vec![0; 0xffff];
+                let tx_packets = vec![0; 0xffff];
                 let rx_buffer = TcpSocketBuffer::new(rx_packets);
                 let tx_buffer = TcpSocketBuffer::new(tx_packets);
                 let socket = TcpSocket::new(rx_buffer, tx_buffer);

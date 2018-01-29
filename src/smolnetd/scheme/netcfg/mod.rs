@@ -1,212 +1,26 @@
-// use managed::ManagedSlice;
+#[macro_use]
+mod nodes;
+mod notifier;
+
+use smoltcp::wire::{EthernetAddress, IpCidr, Ipv4Address};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::str;
-use std::str::FromStr;
 use std::rc::Rc;
-use smoltcp::wire::{EthernetAddress, IpCidr, Ipv4Address};
+use std::str::FromStr;
+use std::str;
 use syscall::data::Stat;
 use syscall::flag::{MODE_DIR, MODE_FILE};
 use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
 use syscall;
 
-use error::Result;
-use super::Interface;
+use self::nodes::*;
+use self::notifier::*;
+use redox_netstack::error::Result;
+use super::{post_fevent, Interface};
 
 const WRITE_BUFFER_MAX_SIZE: usize = 0xffff;
-
-type CfgNodeRef = Rc<RefCell<CfgNode>>;
-
-trait CfgNode {
-    fn is_dir(&self) -> bool {
-        false
-    }
-
-    fn is_writable(&self) -> bool {
-        false
-    }
-
-    fn is_readable(&self) -> bool {
-        true
-    }
-
-    fn read(&self) -> String {
-        String::new()
-    }
-
-    fn write(&self, _buf: &str) -> SyscallResult<usize> {
-        Ok(0)
-    }
-
-    fn open(&self, _file: &str) -> Option<CfgNodeRef> {
-        None
-    }
-}
-
-struct RONode<F>
-where
-    F: Fn() -> String,
-{
-    read_fun: F,
-}
-
-impl<F> CfgNode for RONode<F>
-where
-    F: Fn() -> String,
-{
-    fn read(&self) -> String {
-        (self.read_fun)()
-    }
-}
-
-impl<F> RONode<F>
-where
-    F: 'static + Fn() -> String,
-{
-    fn new(read_fun: F) -> CfgNodeRef {
-        Rc::new(RefCell::new(RONode { read_fun }))
-    }
-}
-
-struct WONode<F>
-where
-    F: Fn(&str) -> SyscallResult<usize>,
-{
-    write_fun: F,
-}
-
-impl<F> CfgNode for WONode<F>
-where
-    F: Fn(&str) -> SyscallResult<usize>,
-{
-    fn write(&self, buf: &str) -> SyscallResult<usize> {
-        (self.write_fun)(buf)
-    }
-
-    fn is_writable(&self) -> bool {
-        true
-    }
-}
-
-impl<F> WONode<F>
-where
-    F: 'static + Fn(&str) -> SyscallResult<usize>,
-{
-    fn new(write_fun: F) -> CfgNodeRef {
-        Rc::new(RefCell::new(WONode { write_fun }))
-    }
-}
-
-struct RWNode<F, G>
-where
-    F: Fn() -> String,
-    G: Fn(&str) -> SyscallResult<usize>,
-{
-    read_fun: F,
-    write_fun: G,
-}
-
-impl<F, G> CfgNode for RWNode<F, G>
-where
-    F: Fn() -> String,
-    G: Fn(&str) -> SyscallResult<usize>,
-{
-    fn read(&self) -> String {
-        (self.read_fun)()
-    }
-
-    fn write(&self, buf: &str) -> SyscallResult<usize> {
-        (self.write_fun)(buf)
-    }
-
-    fn is_writable(&self) -> bool {
-        true
-    }
-}
-
-impl<F, G> RWNode<F, G>
-where
-    F: 'static + Fn() -> String,
-    G: 'static + Fn(&str) -> SyscallResult<usize>,
-{
-    fn new(read_fun: F, write_fun: G) -> CfgNodeRef {
-        Rc::new(RefCell::new(RWNode {
-            read_fun,
-            write_fun,
-        }))
-    }
-}
-
-struct StaticDirNode {
-    child_nodes: BTreeMap<String, CfgNodeRef>,
-}
-
-impl CfgNode for StaticDirNode {
-    fn is_dir(&self) -> bool {
-        true
-    }
-
-    fn read(&self) -> String {
-        let mut files = String::new();
-        for child in self.child_nodes.keys() {
-            if !files.is_empty() {
-                files.push('\n');
-            }
-            files += child;
-        }
-        files
-    }
-
-    fn open(&self, file: &str) -> Option<CfgNodeRef> {
-        self.child_nodes.get(file).map(|node| Rc::clone(node))
-    }
-}
-
-impl StaticDirNode {
-    pub fn new(child_nodes: BTreeMap<String, CfgNodeRef>) -> CfgNodeRef {
-        Rc::new(RefCell::new(StaticDirNode { child_nodes }))
-    }
-}
-
-macro_rules! cfg_node {
-    (val $e:expr) => {
-        $e
-    };
-    (ro [ $($c:ident)* ] || $b:block ) => {
-        {
-            $(let $c = $c.clone();)*
-            RONode::new(move|| $b)
-        }
-    };
-    (wo [ $($c:ident)* ] |$i:ident| $b:block ) => {
-        {
-            $(let $c = $c.clone();)*
-            WONode::new(move |$i: &str| $b)
-        }
-    };
-    (rw [ $($c:ident)* ] || $rb:block |$i:ident| $wb:block ) => {
-        {
-            let read_fun = {
-                $(let $c = $c.clone();)*
-                move || $rb
-            };
-            let write_fun = {
-                $(let $c = $c.clone();)*
-                move |$i: &str| $wb
-            };
-            RWNode::new(read_fun, write_fun)
-        }
-    };
-    ($($e:expr => { $($t:tt)* }),* $(,)*) => {
-        {
-            let mut children = BTreeMap::new();
-            $(children.insert($e.into(), cfg_node!($($t)*));)*
-            StaticDirNode::new(children)
-        }
-    };
-}
 
 fn parse_default_gw(value: &str) -> SyscallResult<Ipv4Address> {
     let mut routes = value.lines();
@@ -227,8 +41,26 @@ fn parse_default_gw(value: &str) -> SyscallResult<Ipv4Address> {
     Err(SyscallError::new(syscall::EINVAL))
 }
 
-fn mk_root_node(iface: Interface) -> CfgNodeRef {
+fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRef) -> CfgNodeRef {
     cfg_node!{
+        "resolv" => {
+            "nameserver" => {
+                rw [dns_config, notifier]
+                || {
+                    format!("{}\n", dns_config.borrow().name_server)
+                }
+                |name_server| {
+                    let ip = Ipv4Address::from_str(name_server.trim())
+                        .map_err(|_| SyscallError::new(syscall::EINVAL))?;
+                    if !ip.is_unicast() {
+                        return Err(SyscallError::new(syscall::EINVAL));
+                    }
+                    dns_config.borrow_mut().name_server = ip;
+                    notifier.borrow_mut().schedule_notify("resolv/nameserver");
+                    Ok(0)
+                }
+            }
+        },
         "route" => {
             "list" => {
                 ro [iface] || {
@@ -240,20 +72,22 @@ fn mk_root_node(iface: Interface) -> CfgNodeRef {
                 }
             },
             "add" => {
-                wo [iface] |routes| {
+                wo [iface, notifier] |routes| {
                     let default_gw = parse_default_gw(routes)?;
                     iface.borrow_mut().set_ipv4_gateway(Some(default_gw));
+                    notifier.borrow_mut().schedule_notify("route/list");
                     Ok(0)
                 }
             },
             "rm" => {
-                wo [iface] |routes| {
+                wo [iface, notifier] |routes| {
                     let default_gw = parse_default_gw(routes)?;
                     let mut iface = iface.borrow_mut();
                     if iface.ipv4_gateway() != Some(default_gw) {
                         return Err(SyscallError::new(syscall::EINVAL));
                     }
                     iface.set_ipv4_gateway(None);
+                    notifier.borrow_mut().schedule_notify("route/list");
                     Ok(0)
                 }
             }
@@ -261,7 +95,7 @@ fn mk_root_node(iface: Interface) -> CfgNodeRef {
         "ifaces" => {
             "eth0" => {
                 "mac" => {
-                    rw [iface]
+                    rw [iface, notifier]
                     || {
                         format!("{}\n", iface.borrow().ethernet_addr())
                     }
@@ -274,6 +108,7 @@ fn mk_root_node(iface: Interface) -> CfgNodeRef {
                             return Err(SyscallError::new(syscall::EINVAL));
                         }
                         iface.borrow_mut().set_ethernet_addr(mac);
+                        notifier.borrow_mut().schedule_notify("ifaces/eth0/mac");
                         Ok(0)
                     }
                 },
@@ -288,9 +123,9 @@ fn mk_root_node(iface: Interface) -> CfgNodeRef {
                         }
                     },
                     "add" => {
-                        wo [iface] |input| {
+                        wo [iface, notifier] |input| {
                             let mut iface = iface.borrow_mut();
-                            let mut cidrs = iface.ip_addrs().iter().cloned().collect::<Vec<_>>();
+                            let mut cidrs = iface.ip_addrs().to_vec();
                             for cidr in input.lines() {
                                 let cidr = IpCidr::from_str(cidr)
                                     .map_err(|_| SyscallError::new(syscall::EINVAL))?;
@@ -302,13 +137,14 @@ fn mk_root_node(iface: Interface) -> CfgNodeRef {
                             iface.update_ip_addrs(|s| {
                                 *s = From::from(cidrs);
                             });
+                            notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
                             Ok(0)
                         }
                     },
                     "rm" => {
-                        wo [iface] |input| {
+                        wo [iface, notifier] |input| {
                             let mut iface = iface.borrow_mut();
-                            let mut cidrs = iface.ip_addrs().iter().cloned().collect::<Vec<_>>();
+                            let mut cidrs = iface.ip_addrs().to_vec();
                             for cidr in input.lines() {
                                 let cidr = IpCidr::from_str(cidr)
                                     .map_err(|_| SyscallError::new(syscall::EINVAL))?;
@@ -324,6 +160,7 @@ fn mk_root_node(iface: Interface) -> CfgNodeRef {
                             iface.update_ip_addrs(|s| {
                                 *s = From::from(cidrs);
                             });
+                            notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
                             Ok(0)
                         }
                     },
@@ -333,7 +170,14 @@ fn mk_root_node(iface: Interface) -> CfgNodeRef {
     }
 }
 
+struct DNSConfig {
+    name_server: Ipv4Address,
+}
+
+type DNSConfigRef = Rc<RefCell<DNSConfig>>;
+
 struct NetCfgFile {
+    path: String,
     cfg_node: CfgNodeRef,
     read_buf: Vec<u8>,
     write_buf: Vec<u8>,
@@ -346,15 +190,21 @@ pub struct NetCfgScheme {
     next_fd: usize,
     files: BTreeMap<usize, NetCfgFile>,
     root_node: CfgNodeRef,
+    notifier: NotifierRef,
 }
 
 impl NetCfgScheme {
     pub fn new(iface: Interface, scheme_file: File) -> NetCfgScheme {
+        let notifier = Notifier::new_ref();
+        let dns_config = Rc::new(RefCell::new(DNSConfig {
+            name_server: Ipv4Address::new(8, 8, 8, 8),
+        }));
         NetCfgScheme {
             scheme_file,
             next_fd: 1,
             files: BTreeMap::new(),
-            root_node: mk_root_node(iface),
+            root_node: mk_root_node(iface, Rc::clone(&notifier), dns_config),
+            notifier,
         }
     }
 
@@ -367,7 +217,15 @@ impl NetCfgScheme {
             self.handle(&mut packet);
             self.scheme_file.write_all(&packet)?;
         }
+        self.notify_scheduled_fds();
         Ok(None)
+    }
+
+    fn notify_scheduled_fds(&mut self) {
+        let fds_to_notify = self.notifier.borrow_mut().get_notified_fds();
+        for fd in fds_to_notify {
+            let _ = post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ, 1);
+        }
     }
 }
 
@@ -387,10 +245,12 @@ impl SchemeMut for NetCfgScheme {
         }
         let read_buf = Vec::from(current_node.borrow().read());
         let fd = self.next_fd;
+        trace!("open {} {}", fd, path);
         self.next_fd += 1;
         self.files.insert(
             fd,
             NetCfgFile {
+                path: path.to_owned(),
                 cfg_node: current_node,
                 uid,
                 pos: 0,
@@ -402,10 +262,17 @@ impl SchemeMut for NetCfgScheme {
     }
 
     fn close(&mut self, fd: usize) -> SyscallResult<usize> {
+        trace!("close {}", fd);
         if let Some(file) = self.files.remove(&fd) {
-            let value = str::from_utf8(&file.write_buf)
-                .or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
-            file.cfg_node.borrow().write(&value)
+            self.notifier.borrow_mut().unsubscribe(&file.path, fd);
+            let node = file.cfg_node.borrow();
+            if node.is_writable() {
+                let value = str::from_utf8(&file.write_buf)
+                    .or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
+                node.write(value)
+            } else {
+                Ok(0)
+            }
         } else {
             Err(SyscallError::new(syscall::EBADF))
         }
@@ -463,5 +330,17 @@ impl SchemeMut for NetCfgScheme {
         stat.st_size = file.read_buf.len() as u64;
 
         Ok(0)
+    }
+
+    fn fevent(&mut self, fd: usize, events: usize) -> SyscallResult<usize> {
+        let file = self.files
+            .get_mut(&fd)
+            .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
+        if events & syscall::EVENT_READ == syscall::EVENT_READ {
+            self.notifier.borrow_mut().subscribe(&file.path, fd);
+        } else {
+            self.notifier.borrow_mut().unsubscribe(&file.path, fd);
+        }
+        Ok(fd)
     }
 }

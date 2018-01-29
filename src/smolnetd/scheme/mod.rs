@@ -183,8 +183,7 @@ impl Smolnetd {
                 }
                 iter_limit -= 1;
                 match iface.poll(&mut socket_set, timestamp) {
-                    Ok(_) => (),
-                    Err(smoltcp::Error::Unrecognized) => (),
+                    Ok(_) | Err(smoltcp::Error::Unrecognized) => (),
                     Err(e) => {
                         error!("poll error: {}", e);
                         break 0;

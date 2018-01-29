@@ -9,7 +9,9 @@ use std::io::{Read, Write};
 use std::mem;
 use std::os::unix::io::RawFd;
 use std::str;
+use std::str::FromStr;
 use std::rc::Rc;
+use std::net::Ipv4Addr;
 use syscall::data::TimeSpec;
 use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
 use syscall;
@@ -40,6 +42,7 @@ enum DnsParsingResult {
 }
 
 struct Domains {
+    nameserver: Ipv4Addr,
     domains: BTreeMap<Rc<str>, Domain>,
     requests: BTreeMap<RawFd, Rc<str>>,
     resolved_timeouts: VecDeque<(TimeSpec, Rc<str>)>,
@@ -48,11 +51,28 @@ struct Domains {
 
 impl Domains {
     fn new() -> Domains {
-        Domains {
+        let mut domains = Domains {
+            nameserver: Ipv4Addr::new(8, 8, 8, 8),
             domains: BTreeMap::new(),
             requests: BTreeMap::new(),
             resolved_timeouts: VecDeque::new(),
             requested_timeouts: VecDeque::new(),
+        };
+        domains.update_nameserver();
+        domains
+    }
+
+    pub fn update_nameserver(&mut self) {
+        if let Ok(mut file) = File::open("netcfg:resolv/nameserver") {
+            let mut nameserver = String::new();
+            if let Ok(_) = file.read_to_string(&mut nameserver) {
+                if let Some(line) = nameserver.lines().next() {
+                    if let Ok(ip) = Ipv4Addr::from_str(&line) {
+                        trace!("Changing nameserver to {}", ip);
+                        self.nameserver = ip;
+                    }
+                }
+            }
         }
     }
 
@@ -62,7 +82,7 @@ impl Domains {
         builder.add_question(domain, QueryType::A, QueryClass::IN);
         let packet = builder.build().ok()?;
         let udp_fd = syscall::open(
-            "udp:8.8.8.8:53",
+            &format!("udp:{}:53", self.nameserver),
             syscall::O_RDWR | syscall::O_CREAT | syscall::O_NONBLOCK,
         ).ok()? as RawFd;
         if syscall::write(udp_fd as usize, &packet) != Ok(packet.len()) {
@@ -131,13 +151,13 @@ impl Domains {
             }
             Entry::Occupied(e) => e,
         };
-        let mut buf = [0u8; 4096];
+        let mut buf = [0u8; 0x1000];
         let readed = syscall::read(fd as usize, &mut buf).ok()?;
         if readed == 0 {
             return None;
         }
         let pkt = DNSPacket::parse(&buf).ok()?;
-        if pkt.header.response_code != ResponseCode::NoError || pkt.answers.len() == 0 {
+        if pkt.header.response_code != ResponseCode::NoError || pkt.answers.is_empty() {
             if let Some(query) = pkt.questions.iter().next() {
                 if query.qname.to_string().to_lowercase() == e.get().as_ref() {
                     unsubscribe_from_fd(fd).ok()?;
@@ -290,11 +310,11 @@ impl Dnsd {
         let fds_to_wakeup = self.domains.on_time_event(&time);
         if !fds_to_wakeup.is_empty() {
             for fd in &fds_to_wakeup {
-                if let Some(file) = self.files.get_mut(&fd) {
+                if let Some(file) = self.files.get_mut(fd) {
                     *file = DnsFile::Timeout;
                 }
             }
-            self.wakeup_fds(fds_to_wakeup);
+            self.wakeup_fds(&fds_to_wakeup);
         }
 
         time.tv_sec += Dnsd::TIME_EVENT_TIMEOUT_S;
@@ -323,6 +343,7 @@ impl Dnsd {
     }
 
     pub fn on_unknown_fd_event(&mut self, fd: RawFd) -> Result<Option<()>> {
+        trace!("Unknown fd event {}", fd);
         let mut cur_time = TimeSpec::default();
         syscall::clock_gettime(syscall::CLOCK_MONOTONIC, &mut cur_time)
             .map_err(|e| Error::from_syscall_error(e, "Can't get time"))?;
@@ -330,24 +351,29 @@ impl Dnsd {
         match self.domains.on_fd_event(fd, &cur_time) {
             Some(DnsParsingResult::FailFiles(fds_to_fail)) => {
                 for fd in &fds_to_fail {
-                    if let Some(file) = self.files.get_mut(&fd) {
+                    if let Some(file) = self.files.get_mut(fd) {
                         *file = DnsFile::Failed;
                     }
                 }
-                self.wakeup_fds(fds_to_fail);
+                self.wakeup_fds(&fds_to_fail);
             }
             Some(DnsParsingResult::WakeUpFiles(fds_to_wakeup)) => {
-                self.wakeup_fds(fds_to_wakeup);
+                self.wakeup_fds(&fds_to_wakeup);
             }
             None => {}
         }
         Ok(None)
     }
 
-    fn wakeup_fds(&mut self, fds_to_wakeup: BTreeSet<usize>) {
+    pub fn on_nameserver_event(&mut self) -> Result<Option<()>> {
+        self.domains.update_nameserver();
+        Ok(None)
+    }
+
+    fn wakeup_fds(&mut self, fds_to_wakeup: &BTreeSet<usize>) {
         let mut syscall_packets = vec![];
-        for fd in &fds_to_wakeup {
-            if let Some(packet) = self.wait_map.remove(&fd) {
+        for fd in fds_to_wakeup {
+            if let Some(packet) = self.wait_map.remove(fd) {
                 syscall_packets.push(packet);
             }
         }
@@ -375,7 +401,7 @@ impl Dnsd {
             }
         }
 
-        return true;
+        true
     }
 }
 

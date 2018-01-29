@@ -8,7 +8,7 @@ impl Log for Logger {
     }
 
     fn log(&self, record: &LogRecord) {
-        println!("{}: {}", record.level(), record.args());
+        println!("{}: {}", record.target(), record.args());
     }
 }
 
