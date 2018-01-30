@@ -84,8 +84,8 @@ where
 {
     pub fn socket_handle(&self) -> SocketHandle {
         match *self {
-            SchemeFile::Socket(SocketFile { socket_handle, .. }) |
-            SchemeFile::Setting(SettingFile { socket_handle, .. }) => socket_handle,
+            SchemeFile::Socket(SocketFile { socket_handle, .. })
+            | SchemeFile::Setting(SettingFile { socket_handle, .. }) => socket_handle,
         }
     }
 }
@@ -580,9 +580,10 @@ where
     }
 
     fn dup(&mut self, fd: usize, buf: &[u8]) -> SyscallResult<usize> {
-        if let Some((flags, uid, gid)) = self.nulls.get(&fd).map(|null| {
-            (null.flags, null.uid, null.gid)
-        }) {
+        if let Some((flags, uid, gid)) = self.nulls
+            .get(&fd)
+            .map(|null| (null.flags, null.uid, null.gid))
+        {
             return self.open(buf, flags, uid, gid);
         }
 

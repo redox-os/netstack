@@ -52,12 +52,17 @@ fn run() -> Result<()> {
         .map_err(|e| Error::from_syscall_error(e, "failed to open :icmp"))?
         as RawFd;
 
+    trace!("opening :netcfg");
+    let netcfg_fd = syscall::open(":netcfg", O_RDWR | O_CREAT | O_NONBLOCK)
+        .map_err(|e| Error::from_syscall_error(e, "failed to open :netcfg"))?
+        as RawFd;
+
     let time_path = format!("time:{}", syscall::CLOCK_MONOTONIC);
     let time_fd = syscall::open(&time_path, syscall::O_RDWR)
         .map_err(|e| Error::from_syscall_error(e, "failed to open time:"))?
         as RawFd;
 
-    let (network_file, ip_file, time_file, udp_file, tcp_file, icmp_file) = unsafe {
+    let (network_file, ip_file, time_file, udp_file, tcp_file, icmp_file, netcfg_file) = unsafe {
         (
             File::from_raw_fd(network_fd),
             File::from_raw_fd(ip_fd),
@@ -65,6 +70,7 @@ fn run() -> Result<()> {
             File::from_raw_fd(udp_fd),
             File::from_raw_fd(tcp_fd),
             File::from_raw_fd(icmp_fd),
+            File::from_raw_fd(netcfg_fd),
         )
     };
 
@@ -75,6 +81,7 @@ fn run() -> Result<()> {
         tcp_file,
         icmp_file,
         time_file,
+        netcfg_file,
     )));
 
     let mut event_queue = EventQueue::<(), Error>::new()
@@ -120,9 +127,17 @@ fn run() -> Result<()> {
         })
         .map_err(|e| Error::from_io_error(e, "failed to listen to icmp events"))?;
 
+    let smolnetd_ = Rc::clone(&smolnetd);
+
     event_queue
-        .add(time_fd, move |_| smolnetd.borrow_mut().on_time_event())
+        .add(time_fd, move |_| smolnetd_.borrow_mut().on_time_event())
         .map_err(|e| Error::from_io_error(e, "failed to listen to time events"))?;
+
+    event_queue
+        .add(netcfg_fd, move |_| {
+            smolnetd.borrow_mut().on_netcfg_scheme_event()
+        })
+        .map_err(|e| Error::from_io_error(e, "failed to listen to netcfg events"))?;
 
     event_queue.trigger_all(0)?;
 
