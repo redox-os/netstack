@@ -5,6 +5,54 @@ use syscall::Result as SyscallResult;
 
 pub type CfgNodeRef = Rc<RefCell<CfgNode>>;
 
+pub trait NodeWriter {
+    fn write_line(&mut self, &str) -> SyscallResult<()> {
+        Ok(())
+    }
+
+    fn commit(&mut self) -> SyscallResult<()> {
+        Ok(())
+    }
+}
+
+pub struct SimpleWriter<T, WL, C>
+where
+    WL: 'static + Fn(&mut T, &str) -> SyscallResult<()>,
+    C: 'static + Fn(&mut T) -> SyscallResult<()>,
+{
+    data: T,
+    write_line: WL,
+    commit: C,
+}
+
+impl<T, WL, C> NodeWriter for SimpleWriter<T, WL, C>
+where
+    WL: 'static + Fn(&mut T, &str) -> SyscallResult<()>,
+    C: 'static + Fn(&mut T) -> SyscallResult<()>,
+{
+    fn write_line(&mut self, line: &str) -> SyscallResult<()> {
+        (self.write_line)(&mut self.data, line)
+    }
+
+    fn commit(&mut self) -> SyscallResult<()> {
+        (self.commit)(&mut self.data)
+    }
+}
+
+impl<T, WL, C> SimpleWriter<T, WL, C>
+where
+    WL: 'static + Fn(&mut T, &str) -> SyscallResult<()>,
+    C: 'static + Fn(&mut T) -> SyscallResult<()>,
+{
+    pub fn new_boxed(data: T, write_line: WL, commit: C) -> Box<Self> {
+        Box::new(SimpleWriter {
+            data,
+            write_line,
+            commit,
+        })
+    }
+}
+
 pub trait CfgNode {
     fn is_dir(&self) -> bool {
         false
@@ -22,11 +70,11 @@ pub trait CfgNode {
         String::new()
     }
 
-    fn write(&self, _buf: &str) -> SyscallResult<usize> {
-        Ok(0)
+    fn open(&self, _file: &str) -> Option<CfgNodeRef> {
+        None
     }
 
-    fn open(&self, _file: &str) -> Option<CfgNodeRef> {
+    fn new_writer(&self) -> Option<Box<NodeWriter>> {
         None
     }
 }
@@ -56,21 +104,17 @@ where
     }
 }
 
-pub struct WONode<F>
+pub struct WONode<W>
 where
-    F: Fn(&str) -> SyscallResult<usize>,
+    W: 'static + Fn() -> Box<NodeWriter>,
 {
-    write_fun: F,
+    new_writer: W,
 }
 
-impl<F> CfgNode for WONode<F>
+impl<W> CfgNode for WONode<W>
 where
-    F: Fn(&str) -> SyscallResult<usize>,
+    W: 'static + Fn() -> Box<NodeWriter>,
 {
-    fn write(&self, buf: &str) -> SyscallResult<usize> {
-        (self.write_fun)(buf)
-    }
-
     fn is_readable(&self) -> bool {
         false
     }
@@ -78,53 +122,57 @@ where
     fn is_writable(&self) -> bool {
         true
     }
-}
 
-impl<F> WONode<F>
-where
-    F: 'static + Fn(&str) -> SyscallResult<usize>,
-{
-    pub fn new_ref(write_fun: F) -> CfgNodeRef {
-        Rc::new(RefCell::new(WONode { write_fun }))
+    fn new_writer(&self) -> Option<Box<NodeWriter>> {
+        Some((self.new_writer)())
     }
 }
 
-pub struct RWNode<F, G>
+impl<W> WONode<W>
 where
-    F: Fn() -> String,
-    G: Fn(&str) -> SyscallResult<usize>,
+    W: 'static + Fn() -> Box<NodeWriter>,
 {
-    read_fun: F,
-    write_fun: G,
+    pub fn new_ref(new_writer: W) -> CfgNodeRef {
+        Rc::new(RefCell::new(WONode { new_writer }))
+    }
 }
 
-impl<F, G> CfgNode for RWNode<F, G>
+pub struct RWNode<F, W>
 where
     F: Fn() -> String,
-    G: Fn(&str) -> SyscallResult<usize>,
+    W: 'static + Fn() -> Box<NodeWriter>,
+{
+    read_fun: F,
+    new_writer: W,
+}
+
+impl<F, W> CfgNode for RWNode<F, W>
+where
+    F: Fn() -> String,
+    W: 'static + Fn() -> Box<NodeWriter>,
 {
     fn read(&self) -> String {
         (self.read_fun)()
     }
 
-    fn write(&self, buf: &str) -> SyscallResult<usize> {
-        (self.write_fun)(buf)
-    }
-
     fn is_writable(&self) -> bool {
         true
     }
+
+    fn new_writer(&self) -> Option<Box<NodeWriter>> {
+        Some((self.new_writer)())
+    }
 }
 
-impl<F, G> RWNode<F, G>
+impl<F, W> RWNode<F, W>
 where
     F: 'static + Fn() -> String,
-    G: 'static + Fn(&str) -> SyscallResult<usize>,
+    W: 'static + Fn() -> Box<NodeWriter>,
 {
-    pub fn new_ref(read_fun: F, write_fun: G) -> CfgNodeRef {
+    pub fn new_ref(read_fun: F, new_writer: W) -> CfgNodeRef {
         Rc::new(RefCell::new(RWNode {
             read_fun,
-            write_fun,
+            new_writer,
         }))
     }
 }
@@ -170,23 +218,46 @@ macro_rules! cfg_node {
             RONode::new_ref(move|| $b)
         }
     };
-    (wo [ $($c:ident),* ] |$i:ident| $b:block ) => {
+    (wo [ $($c:ident),* ] ( $et:ty , $e:expr ) |$data_i:ident, $line_i:ident|
+     $write_line:block |$data_i2:ident| $commit:block) => {
         {
-            $(let $c = $c.clone();)*
-            WONode::new_ref(move |$i: &str| $b)
+            $(#[allow(unused_variables)] let $c = $c.clone();)*;
+            let new_writer = move || -> Box<NodeWriter> {
+                let write_line = {
+                    $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                    move |$data_i: &mut $et, $line_i: &str| $write_line
+                };
+                let commit = {
+                    $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                    move |$data_i2: &mut $et| $commit
+                };
+                let data: $et = $e;
+                SimpleWriter::new_boxed(data, write_line, commit)
+            };
+            WONode::new_ref(new_writer)
         }
     };
-    (rw [ $($c:ident),* ] || $rb:block |$i:ident| $wb:block ) => {
+    (rw [ $($c:ident),* ] ( $et:ty , $e:expr ) || $read_fun:block |$data_i:ident, $line_i:ident|
+     $write_line:block |$data_i2:ident| $commit:block) => {
         {
             let read_fun = {
-                $(#[allow(unused_variables)] let $c = $c.clone();)*
-                move || $rb
+                $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                move || $read_fun
             };
-            let write_fun = {
-                $(#[allow(unused_variables)] let $c = $c.clone();)*
-                move |$i: &str| $wb
+            $(#[allow(unused_variables)] let $c = $c.clone();)*;
+            let new_writer = move || -> Box<NodeWriter> {
+                let write_line = {
+                    $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                    move |$data_i: &mut $et, $line_i: &str| $write_line
+                };
+                let commit = {
+                    $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                    move |$data_i2: &mut $et| $commit
+                };
+                let data: $et = $e;
+                SimpleWriter::new_boxed(data, write_line, commit)
             };
-            RWNode::new_ref(read_fun, write_fun)
+            RWNode::new_ref(read_fun, new_writer)
         }
     };
     ($($e:expr => { $($t:tt)* }),* $(,)*) => {
