@@ -65,9 +65,9 @@ impl Domains {
     pub fn update_nameserver(&mut self) {
         if let Ok(mut file) = File::open("netcfg:resolv/nameserver") {
             let mut nameserver = String::new();
-            if let Ok(_) = file.read_to_string(&mut nameserver) {
+            if file.read_to_string(&mut nameserver).is_ok() {
                 if let Some(line) = nameserver.lines().next() {
-                    if let Ok(ip) = Ipv4Addr::from_str(&line) {
+                    if let Ok(ip) = Ipv4Addr::from_str(line) {
                         trace!("Changing nameserver to {}", ip);
                         self.nameserver = ip;
                     }
