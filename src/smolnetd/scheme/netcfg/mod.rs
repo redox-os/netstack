@@ -67,10 +67,8 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                     if let Some(ip) = *cur_value {
                         dns_config.borrow_mut().name_server = ip;
                         notifier.borrow_mut().schedule_notify("resolv/nameserver");
-                        Ok(())
-                    } else {
-                        Err(SyscallError::new(syscall::EINVAL))
                     }
+                    Ok(())
                 }
             }
         },
@@ -161,20 +159,43 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                         if let Some(mac) = *cur_value {
                             iface.borrow_mut().set_ethernet_addr(mac);
                             notifier.borrow_mut().schedule_notify("ifaces/eth0/mac");
-                            Ok(())
-                        } else {
-                            Err(SyscallError::new(syscall::EINVAL))
                         }
+                        Ok(())
                     }
                 },
                 "addr" => {
                     "list" => {
-                        ro [iface] || {
+                        ro [iface]
+                        || {
                             let mut ips = String::new();
                             for cidr in iface.borrow().ip_addrs() {
                                 ips += &format!("{}\n", cidr);
                             }
                             ips
+                        }
+                    },
+                    "set" => {
+                        wo [iface, notifier] (Vec<IpCidr>, Vec::new())
+                        |cur_value, line| {
+                            let cidr = IpCidr::from_str(line)
+                                .map_err(|_| SyscallError::new(syscall::EINVAL))?;
+                            if !cidr.address().is_unicast() {
+                                return Err(SyscallError::new(syscall::EINVAL));
+                            }
+                            cur_value.push(cidr);
+                            Ok(())
+                        }
+                        |cur_value| {
+                            if !cur_value.is_empty() {
+                                let mut iface = iface.borrow_mut();
+                                let mut cidrs = vec![];
+                                mem::swap(cur_value, &mut cidrs);
+                                iface.update_ip_addrs(|s| {
+                                    *s = From::from(cidrs);
+                                });
+                                notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
+                            }
+                            Ok(())
                         }
                     },
                     "add" => {
@@ -270,7 +291,8 @@ impl NetCfgFile {
 
     fn consume_lines(&mut self) -> SyscallResult<()> {
         if let Some(ref mut node_writer) = self.node_writer {
-            let mut swap_with = {
+            let mut swap_with = None;
+            {
                 let mut lines = self.write_buf.split(|&c| c == b'\n');
                 if let Some(mut cur_line) = lines.next() {
                     let mut consumed = false;
@@ -283,14 +305,10 @@ impl NetCfgFile {
                         consumed = true;
                     }
                     if consumed {
-                        Some(From::from(cur_line))
-                    } else {
-                        None
+                        swap_with = Some(From::from(cur_line))
                     }
-                } else {
-                    None
                 }
-            };
+            }
             if let Some(ref mut new_vec) = swap_with {
                 mem::swap(&mut self.write_buf, new_vec);
             }
@@ -389,7 +407,7 @@ impl SchemeMut for NetCfgScheme {
             if !file.done {
                 file.commit().map(|_| 0)
             } else {
-                Err(SyscallError::new(syscall::EBADF))
+                Ok(0)
             }
         } else {
             Err(SyscallError::new(syscall::EBADF))
