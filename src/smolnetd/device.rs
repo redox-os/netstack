@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::Write;
 use std::rc::Rc;
 
+use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
 use buffer_pool::{Buffer, BufferPool};
 
@@ -44,7 +45,7 @@ pub struct RxToken {
 }
 
 impl smoltcp::phy::RxToken for RxToken {
-    fn consume<R, F>(self, _timestamp: u64, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
     where
         F: FnOnce(&[u8]) -> smoltcp::Result<R>,
     {
@@ -57,7 +58,7 @@ pub struct TxToken {
 }
 
 impl smoltcp::phy::TxToken for TxToken {
-    fn consume<R, F>(self, _timestamp: u64, len: usize, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> smoltcp::Result<R>
     where
         F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
     {
