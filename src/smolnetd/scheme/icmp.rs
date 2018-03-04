@@ -1,5 +1,5 @@
 use smoltcp::socket::{IcmpEndpoint, IcmpPacketBuffer, IcmpSocket, IcmpSocketBuffer, SocketHandle};
-use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress};
+use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress, IpEndpoint, Icmpv4DstUnreachable, Ipv4Repr, IpProtocol, Ipv4Address};
 use std::mem;
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
@@ -136,7 +136,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                     .get_port()
                     .ok_or_else(|| SyscallError::new(syscall::EINVAL))?;
                 icmp_socket
-                    .bind(IcmpEndpoint::Ident(ident))
+                    .bind(IcmpEndpoint::Udp(IpEndpoint::from(ident)))
                     .map_err(|_| syscall::Error::new(syscall::EINVAL))?;
                 let socket_data = IcmpData {
                     socket_type: IcmpSocketType::Udp,
@@ -187,8 +187,32 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                     Ok(buf.len())
                 }
                 IcmpSocketType::Udp => {
-                    //TODO:
-                    Ok(0)
+                    if buf.len() < mem::size_of::<u16>() {
+                        return Err(SyscallError::new(syscall::EINVAL));
+                    }
+                    let (_, payload) = buf.split_at(mem::size_of::<u16>());
+                    let dst_ip = match file.data.ip {
+                        IpAddress::Ipv4(ip) => ip,
+                        _ => Ipv4Address::default(),
+                    };
+                    let icmp_repr = Icmpv4Repr::DstUnreachable {
+                        reason: Icmpv4DstUnreachable::PortUnreachable,
+                        header: Ipv4Repr {
+                            src_addr: Ipv4Address::default(),
+                            dst_addr: dst_ip,
+                            protocol: IpProtocol::Icmp,
+                            payload_len: buf.len(),
+                            hop_limit: 0x40
+                        },
+                        data: payload,
+                    };
+
+                    let icmp_payload = self.send(icmp_repr.buffer_len(), file.data.ip)
+                        .map_err(|_| syscall::Error::new(syscall::EINVAL))?;
+                    let mut icmp_packet = Icmpv4Packet::new(icmp_payload);
+                    //TODO: replace Default with actual caps
+                    icmp_repr.emit(&mut icmp_packet, &Default::default());
+                    Ok(buf.len())
                 }
             }
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
