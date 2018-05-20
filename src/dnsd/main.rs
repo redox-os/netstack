@@ -49,6 +49,8 @@ fn run() -> Result<()> {
     let mut event_queue = EventQueue::<(), Error>::new()
         .map_err(|e| Error::from_io_error(e, "failed to create event queue"))?;
 
+    syscall::setrens(0, 0).expect("dnsd: failed to enter null namespace");
+
     let dnsd_ = Rc::clone(&dnsd);
 
     event_queue
