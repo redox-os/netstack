@@ -139,7 +139,10 @@ fn run() -> Result<()> {
         })
         .map_err(|e| Error::from_io_error(e, "failed to listen to netcfg events"))?;
 
-    event_queue.trigger_all(0)?;
+    event_queue.trigger_all(event::Event {
+        fd: 0,
+        flags: 0
+    })?;
 
     event_queue.run()
 }
