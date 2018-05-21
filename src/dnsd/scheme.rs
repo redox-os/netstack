@@ -165,7 +165,7 @@ impl Domains {
                     let domain = e.remove();
                     self.requested_timeouts
                         .retain(|&(_, ref d)| d.as_ref() != domain.as_ref());
-                    if let Entry::Occupied(mut e) = self.domains.entry(domain) {
+                    if let Entry::Occupied(e) = self.domains.entry(domain) {
                         let domain_data = e.remove();
                         return if let Domain::Requested { waiting_fds, .. } = domain_data {
                             Some(DnsParsingResult::FailFiles(waiting_fds))
