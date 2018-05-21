@@ -1,5 +1,5 @@
 use smoltcp::socket::{IcmpEndpoint, IcmpPacketBuffer, IcmpSocket, IcmpSocketBuffer, SocketHandle};
-use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress};
+use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress, IpEndpoint};
 use std::mem;
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
@@ -15,6 +15,7 @@ pub type IcmpScheme = SocketScheme<IcmpSocket<'static, 'static>>;
 
 enum IcmpSocketType {
     Echo,
+    Udp,
 }
 
 pub struct IcmpData {
@@ -111,6 +112,38 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 };
                 Ok((handle, socket_data))
             }
+            "udp" => {
+                let addr = parts
+                    .next()
+                    .ok_or_else(|| syscall::Error::new(syscall::EINVAL))?;
+                let ip =
+                    IpAddress::from_str(addr).map_err(|_| syscall::Error::new(syscall::EINVAL))?;
+
+                let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
+                let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
+                for _ in 0..Smolnetd::SOCKET_BUFFER_SIZE {
+                    rx_packets.push(IcmpPacketBuffer::new(vec![0; NetworkDevice::MTU]));
+                }
+
+                let socket = IcmpSocket::new(
+                    IcmpSocketBuffer::new(rx_packets),
+                    IcmpSocketBuffer::new(tx_packets),
+                );
+                let handle = socket_set.add(socket);
+                let mut icmp_socket = socket_set.get::<IcmpSocket>(handle);
+                let ident = ident_set
+                    .get_port()
+                    .ok_or_else(|| SyscallError::new(syscall::EINVAL))?;
+                icmp_socket
+                    .bind(IcmpEndpoint::Udp(IpEndpoint::from(ident)))
+                    .map_err(|_| syscall::Error::new(syscall::EINVAL))?;
+                let socket_data = IcmpData {
+                    socket_type: IcmpSocketType::Udp,
+                    ident,
+                    ip,
+                };
+                Ok((handle, socket_data))
+            }
             _ => Err(syscall::Error::new(syscall::EINVAL)),
         }
     }
@@ -151,6 +184,9 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                     //TODO: replace Default with actual caps
                     icmp_repr.emit(&mut icmp_packet, &Default::default());
                     Ok(buf.len())
+                }
+                IcmpSocketType::Udp => {
+                    Err(SyscallError::new(syscall::EINVAL))
                 }
             }
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
@@ -216,9 +252,22 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
 
                     Ok(i)
                 }
+                IcmpSocketType::Udp => {
+                    let path = format!("icmp:udp/{}", socket_file.data.ip);
+                    let path = path.as_bytes();
+
+                    let mut i = 0;
+                    while i < buf.len() && i < path.len() {
+                        buf[i] = path[i];
+                        i += 1;
+                    }
+
+                    Ok(i)
+                }
             }
         } else {
             Err(SyscallError::new(syscall::EBADF))
         }
     }
 }
+
