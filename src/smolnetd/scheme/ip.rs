@@ -88,14 +88,14 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &[u8],
-    ) -> SyscallResult<usize> {
+    ) -> SyscallResult<Option<usize>> {
         if self.can_send() {
             self.send_slice(buf).expect("Can't send slice");
-            Ok(buf.len())
+            Ok(Some(buf.len()))
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Ok(0)
-        } else {
             Err(SyscallError::new(syscall::EWOULDBLOCK))
+        } else {
+            Ok(None) // internally scheduled to re-read
         }
     }
 
@@ -103,14 +103,14 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
-    ) -> SyscallResult<usize> {
+    ) -> SyscallResult<Option<usize>> {
         if self.can_recv() {
             let length = self.recv_slice(buf).expect("Can't receive slice");
-            Ok(length)
+            Ok(Some(length))
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Ok(0)
-        } else {
             Err(SyscallError::new(syscall::EWOULDBLOCK))
+        } else {
+            Ok(None) // internally scheduled to re-read
         }
     }
 
