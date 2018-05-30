@@ -163,7 +163,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &[u8],
-    ) -> SyscallResult<usize> {
+    ) -> SyscallResult<Option<usize>> {
         if self.can_send() {
             match file.data.socket_type {
                 IcmpSocketType::Echo => {
@@ -183,16 +183,16 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                     let mut icmp_packet = Icmpv4Packet::new(icmp_payload);
                     //TODO: replace Default with actual caps
                     icmp_repr.emit(&mut icmp_packet, &Default::default());
-                    Ok(buf.len())
+                    Ok(Some(buf.len()))
                 }
                 IcmpSocketType::Udp => {
                     Err(SyscallError::new(syscall::EINVAL))
                 }
             }
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Ok(0)
+            Err(SyscallError::new(syscall::EAGAIN))
         } else {
-            Err(SyscallError::new(syscall::EWOULDBLOCK))
+            Ok(None) // internally scheduled to re-read
         }
     }
 
@@ -200,7 +200,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
         &mut self,
         file: &mut SocketFile<Self::DataT>,
         buf: &mut [u8],
-    ) -> SyscallResult<usize> {
+    ) -> SyscallResult<Option<usize>> {
         while self.can_recv() {
             let (payload, _) = self.recv().expect("Can't recv icmp packet");
             let icmp_packet = Icmpv4Packet::new(&payload);
@@ -217,14 +217,14 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                     buf[mem::size_of::<u16>() + i] = data[i];
                 }
 
-                return Ok(mem::size_of::<u16>() + data.len());
+                return Ok(Some(mem::size_of::<u16>() + data.len()));
             }
         }
 
         if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Ok(0)
+            Err(SyscallError::new(syscall::EAGAIN))
         } else {
-            Err(SyscallError::new(syscall::EWOULDBLOCK))
+            Ok(None) // internally scheduled to re-read
         }
     }
 
