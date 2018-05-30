@@ -190,7 +190,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 }
             }
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Err(SyscallError::new(syscall::EWOULDBLOCK))
+            Err(SyscallError::new(syscall::EAGAIN))
         } else {
             Ok(None) // internally scheduled to re-read
         }
@@ -222,7 +222,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
         }
 
         if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Err(SyscallError::new(syscall::EWOULDBLOCK))
+            Err(SyscallError::new(syscall::EAGAIN))
         } else {
             Ok(None) // internally scheduled to re-read
         }

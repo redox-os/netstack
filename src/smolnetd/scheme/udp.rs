@@ -117,7 +117,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             self.send_slice(buf, file.data).expect("Can't send slice");
             Ok(Some(buf.len()))
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Err(SyscallError::new(syscall::EWOULDBLOCK))
+            Err(SyscallError::new(syscall::EAGAIN))
         } else {
             Ok(None) // internally scheduled to re-read
         }
@@ -132,7 +132,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             let (length, _) = self.recv_slice(buf).expect("Can't receive slice");
             Ok(Some(length))
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Err(SyscallError::new(syscall::EWOULDBLOCK))
+            Err(SyscallError::new(syscall::EAGAIN))
         } else {
             Ok(None) // internally scheduled to re-read
         }
