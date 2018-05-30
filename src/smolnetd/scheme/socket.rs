@@ -28,6 +28,8 @@ pub struct SocketFile<DataT> {
 
     events: usize,
     socket_handle: SocketHandle,
+    read_notified: bool,
+    write_notified: bool,
     read_timeout: Option<TimeSpec>,
     write_timeout: Option<TimeSpec>,
 }
@@ -37,6 +39,8 @@ impl<DataT> SocketFile<DataT> {
         SocketFile {
             flags: self.flags,
             events: self.events,
+            read_notified: false, // we still want to notify about this new socket
+            write_notified: false,
             read_timeout: self.read_timeout,
             write_timeout: self.write_timeout,
             socket_handle: self.socket_handle,
@@ -48,6 +52,8 @@ impl<DataT> SocketFile<DataT> {
         SocketFile {
             flags: 0,
             events: 0,
+            read_notified: false,
+            write_notified: false,
             read_timeout: None,
             write_timeout: None,
             socket_handle,
@@ -198,10 +204,12 @@ where
 
     pub fn notify_sockets(&mut self) -> Result<()> {
         // Notify non-blocking sockets
-        for (&fd, file) in &self.files {
-            if let SchemeFile::Socket(SocketFile {
+        for (&fd, ref mut file) in &mut self.files {
+            if let &mut SchemeFile::Socket(SocketFile {
                 socket_handle,
                 events,
+                ref mut read_notified,
+                ref mut write_notified,
                 ..
             }) = *file
             {
@@ -209,11 +217,21 @@ where
                 let socket = socket_set.get::<SocketT>(socket_handle);
 
                 if events & syscall::EVENT_READ == syscall::EVENT_READ && socket.can_recv() {
-                    post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ, 1)?;
+                    if !*read_notified {
+                        post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ, 1)?;
+                        *read_notified = true;
+                    }
+                } else {
+                    *read_notified = false;
                 }
 
                 if events & syscall::EVENT_WRITE == syscall::EVENT_WRITE && socket.can_send() {
-                    post_fevent(&mut self.scheme_file, fd, syscall::EVENT_WRITE, 1)?;
+                    if !*write_notified {
+                        post_fevent(&mut self.scheme_file, fd, syscall::EVENT_WRITE, 1)?;
+                        *write_notified = true;
+                    }
+                } else {
+                    *write_notified = false;
                 }
             }
         }
@@ -488,6 +506,8 @@ where
                 flags,
                 events: 0,
                 socket_handle,
+                read_notified: false,
+                write_notified: false,
                 write_timeout: None,
                 read_timeout: None,
                 data,
@@ -663,6 +683,8 @@ where
             SchemeFile::Setting(_) => Err(SyscallError::new(syscall::EBADF)),
             SchemeFile::Socket(ref mut file) => {
                 file.events = events;
+                file.read_notified = false; // resend missed events
+                file.write_notified = false;
                 Ok(fd)
             }
         }

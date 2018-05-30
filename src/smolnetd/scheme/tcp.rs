@@ -120,7 +120,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             self.send_slice(buf).expect("Can't send slice");
             Ok(buf.len())
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Ok(0)
+            Err(SyscallError::new(syscall::EAGAIN))
         } else {
             Err(SyscallError::new(syscall::EWOULDBLOCK))
         }
@@ -137,7 +137,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             let length = self.recv_slice(buf).expect("Can't receive slice");
             Ok(length)
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-            Ok(0)
+            Err(SyscallError::new(syscall::EAGAIN))
         } else {
             Err(SyscallError::new(syscall::EWOULDBLOCK))
         }
@@ -159,7 +159,11 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         let file = match path {
             "listen" => if let SchemeFile::Socket(ref tcp_handle) = *file {
                 if !is_active {
-                    return Err(SyscallError::new(syscall::EWOULDBLOCK));
+                    if tcp_handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
+                        return Err(SyscallError::new(syscall::EAGAIN));
+                    } else {
+                        return Err(SyscallError::new(syscall::EWOULDBLOCK));
+                    }
                 }
                 trace!("TCP creating new listening socket");
                 let new_handle = SchemeFile::Socket(tcp_handle.clone_with_data(()));
