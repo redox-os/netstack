@@ -2,7 +2,7 @@
 mod nodes;
 mod notifier;
 
-use smoltcp::wire::{EthernetAddress, IpCidr, Ipv4Address};
+use smoltcp::wire::{IpAddress, EthernetAddress, IpCidr, Ipv4Address};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -22,6 +22,11 @@ use redox_netstack::error::Result;
 use super::{post_fevent, Interface};
 
 const WRITE_BUFFER_MAX_SIZE: usize = 0xffff;
+
+fn gateway_cidr() -> IpCidr {
+    // TODO: const fn
+    IpCidr::new(IpAddress::v4(0, 0, 0, 0), 0)
+}
 
 fn parse_default_gw(value: &str) -> SyscallResult<Ipv4Address> {
     let mut routes = value.lines();
@@ -75,7 +80,11 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
         "route" => {
             "list" => {
                 ro [iface] || {
-                    if let Some(ip) = iface.borrow().ipv4_gateway() {
+                    let mut gateway = None;
+                    iface.borrow_mut().routes_mut().update(|map| {
+                        gateway = map.get(&gateway_cidr()).map(|route| route.via_router);
+                    });
+                    if let Some(ip) = gateway {
                         format!("default via {}\n", ip)
                     } else {
                         String::new()
@@ -98,7 +107,9 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                 }
                 |cur_value| {
                     if let Some(default_gw) = *cur_value {
-                        iface.borrow_mut().set_ipv4_gateway(Some(default_gw));
+                        if iface.borrow_mut().routes_mut().add_default_ipv4_route(default_gw).is_err() {
+                            return Err(SyscallError::new(syscall::EINVAL));
+                        }
                         notifier.borrow_mut().schedule_notify("route/list");
                         Ok(())
                     } else {
@@ -123,10 +134,16 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                 |cur_value| {
                     if let Some(default_gw) = *cur_value {
                         let mut iface = iface.borrow_mut();
-                        if iface.ipv4_gateway() != Some(default_gw) {
+                        let mut gateway = None;
+                        iface.routes_mut().update(|map| {
+                            gateway = map.get(&gateway_cidr()).map(|route| route.via_router);
+                        });
+                        if gateway != Some(IpAddress::Ipv4(default_gw)) {
                             return Err(SyscallError::new(syscall::EINVAL));
                         }
-                        iface.set_ipv4_gateway(None);
+                        iface.routes_mut().update(|map| {
+                            map.remove(&gateway_cidr());
+                        });
                         notifier.borrow_mut().schedule_notify("route/list");
                         Ok(())
                     } else {

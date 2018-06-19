@@ -1,4 +1,4 @@
-use smoltcp::socket::{SocketHandle, UdpPacketBuffer, UdpSocket, UdpSocketBuffer};
+use smoltcp::socket::{SocketHandle, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
 use smoltcp::wire::IpEndpoint;
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
@@ -66,14 +66,14 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             return Err(SyscallError::new(syscall::EACCES));
         }
 
-        let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
-        let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
-        for _ in 0..Smolnetd::SOCKET_BUFFER_SIZE {
-            rx_packets.push(UdpPacketBuffer::new(vec![0; NetworkDevice::MTU]));
-            tx_packets.push(UdpPacketBuffer::new(vec![0; NetworkDevice::MTU]));
-        }
-        let rx_buffer = UdpSocketBuffer::new(rx_packets);
-        let tx_buffer = UdpSocketBuffer::new(tx_packets);
+        let rx_buffer = UdpSocketBuffer::new(
+            vec![UdpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
+            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+        );
+        let tx_buffer = UdpSocketBuffer::new(
+            vec![UdpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
+            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+        );
         let udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
 
         if local_endpoint.port == 0 {
