@@ -1,4 +1,4 @@
-use smoltcp::socket::{RawPacketBuffer, RawSocket, RawSocketBuffer, SocketHandle};
+use smoltcp::socket::{RawPacketMetadata, RawSocket, RawSocketBuffer, SocketHandle};
 use smoltcp::wire::{IpProtocol, IpVersion};
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
@@ -61,14 +61,14 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
         let proto =
             u8::from_str_radix(path, 16).or_else(|_| Err(SyscallError::new(syscall::ENOENT)))?;
 
-        let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
-        let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
-        for _ in 0..Smolnetd::SOCKET_BUFFER_SIZE {
-            rx_packets.push(RawPacketBuffer::new(vec![0; NetworkDevice::MTU]));
-            tx_packets.push(RawPacketBuffer::new(vec![0; NetworkDevice::MTU]));
-        }
-        let rx_buffer = RawSocketBuffer::new(rx_packets);
-        let tx_buffer = RawSocketBuffer::new(tx_packets);
+        let rx_buffer = RawSocketBuffer::new(
+            vec![RawPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
+            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+        );
+        let tx_buffer = RawSocketBuffer::new(
+            vec![RawPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
+            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+        );
         let ip_socket = RawSocket::new(
             IpVersion::Ipv4,
             IpProtocol::from(proto),

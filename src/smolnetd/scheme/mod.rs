@@ -1,6 +1,6 @@
 use netutils::getcfg;
 use smoltcp;
-use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache};
+use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache, Routes};
 use smoltcp::socket::SocketSet as SmoltcpSocketSet;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
@@ -31,7 +31,7 @@ mod icmp;
 mod netcfg;
 
 type SocketSet = SmoltcpSocketSet<'static, 'static, 'static>;
-type Interface = Rc<RefCell<EthernetInterface<'static, 'static, NetworkDevice>>>;
+type Interface = Rc<RefCell<EthernetInterface<'static, 'static, 'static, NetworkDevice>>>;
 
 const MAX_DURATION: Duration = Duration { millis: ::std::u64::MAX };
 const MIN_DURATION: Duration = Duration { millis: 0 };
@@ -89,11 +89,13 @@ impl Smolnetd {
             hardware_addr,
             Rc::clone(&buffer_pool),
         );
+        let mut routes = Routes::new(BTreeMap::new());
+        routes.add_default_ipv4_route(default_gw).expect("Failed to add default gateway");
         let iface = EthernetInterfaceBuilder::new(network_device)
             .neighbor_cache(NeighborCache::new(BTreeMap::new()))
             .ethernet_addr(hardware_addr)
             .ip_addrs(protocol_addrs)
-            .ipv4_gateway(default_gw)
+            .routes(routes)
             .finalize();
         let iface = Rc::new(RefCell::new(iface));
         let socket_set = Rc::new(RefCell::new(SocketSet::new(vec![])));

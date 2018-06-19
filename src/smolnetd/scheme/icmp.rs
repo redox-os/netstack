@@ -1,4 +1,4 @@
-use smoltcp::socket::{IcmpEndpoint, IcmpPacketBuffer, IcmpSocket, IcmpSocketBuffer, SocketHandle};
+use smoltcp::socket::{IcmpEndpoint, IcmpPacketMetadata, IcmpSocket, IcmpSocketBuffer, SocketHandle};
 use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress, IpEndpoint};
 use std::mem;
 use std::str;
@@ -86,16 +86,15 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 let ip =
                     IpAddress::from_str(addr).map_err(|_| syscall::Error::new(syscall::EINVAL))?;
 
-                let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
-                let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
-                for _ in 0..Smolnetd::SOCKET_BUFFER_SIZE {
-                    rx_packets.push(IcmpPacketBuffer::new(vec![0; NetworkDevice::MTU]));
-                    tx_packets.push(IcmpPacketBuffer::new(vec![0; NetworkDevice::MTU]));
-                }
-
                 let socket = IcmpSocket::new(
-                    IcmpSocketBuffer::new(rx_packets),
-                    IcmpSocketBuffer::new(tx_packets),
+                    IcmpSocketBuffer::new(
+                        vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
+                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                    ),
+                    IcmpSocketBuffer::new(
+                        vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
+                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                    )
                 );
                 let handle = socket_set.add(socket);
                 let mut icmp_socket = socket_set.get::<IcmpSocket>(handle);
@@ -119,15 +118,15 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 let ip =
                     IpAddress::from_str(addr).map_err(|_| syscall::Error::new(syscall::EINVAL))?;
 
-                let mut rx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
-                let mut tx_packets = Vec::with_capacity(Smolnetd::SOCKET_BUFFER_SIZE);
-                for _ in 0..Smolnetd::SOCKET_BUFFER_SIZE {
-                    rx_packets.push(IcmpPacketBuffer::new(vec![0; NetworkDevice::MTU]));
-                }
-
                 let socket = IcmpSocket::new(
-                    IcmpSocketBuffer::new(rx_packets),
-                    IcmpSocketBuffer::new(tx_packets),
+                    IcmpSocketBuffer::new(
+                        vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
+                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                    ),
+                    IcmpSocketBuffer::new(
+                        vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
+                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                    )
                 );
                 let handle = socket_set.add(socket);
                 let mut icmp_socket = socket_set.get::<IcmpSocket>(handle);
