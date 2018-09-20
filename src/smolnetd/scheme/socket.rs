@@ -711,21 +711,32 @@ where
     }
 
     fn fcntl(&mut self, fd: usize, cmd: usize, arg: usize) -> SyscallResult<Option<usize>> {
-        let file = self.files
-            .get_mut(&fd)
-            .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
-
-        if let SchemeFile::Socket(ref mut socket_file) = *file {
+        if let Some(ref mut null) = self.nulls.get_mut(&fd) {
             match cmd {
-                syscall::F_GETFL => Ok(Some(socket_file.flags)),
+                syscall::F_GETFL => Ok(Some(null.flags)),
                 syscall::F_SETFL => {
-                    socket_file.flags = arg & !syscall::O_ACCMODE;
+                    null.flags = arg & !syscall::O_ACCMODE;
                     Ok(Some(0))
                 }
                 _ => Err(SyscallError::new(syscall::EINVAL)),
             }
         } else {
-            Err(SyscallError::new(syscall::EBADF))
+            let file = self.files
+                .get_mut(&fd)
+                .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
+
+            if let SchemeFile::Socket(ref mut socket_file) = *file {
+                match cmd {
+                    syscall::F_GETFL => Ok(Some(socket_file.flags)),
+                    syscall::F_SETFL => {
+                        socket_file.flags = arg & !syscall::O_ACCMODE;
+                        Ok(Some(0))
+                    }
+                    _ => Err(SyscallError::new(syscall::EINVAL)),
+                }
+            } else {
+                Err(SyscallError::new(syscall::EBADF))
+            }
         }
     }
 }
