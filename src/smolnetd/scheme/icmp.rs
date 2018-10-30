@@ -179,7 +179,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
 
                     let icmp_payload = self.send(icmp_repr.buffer_len(), file.data.ip)
                         .map_err(|_| syscall::Error::new(syscall::EINVAL))?;
-                    let mut icmp_packet = Icmpv4Packet::new(icmp_payload);
+                    let mut icmp_packet = Icmpv4Packet::new_unchecked(icmp_payload);
                     //TODO: replace Default with actual caps
                     icmp_repr.emit(&mut icmp_packet, &Default::default());
                     Ok(Some(buf.len()))
@@ -202,7 +202,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
     ) -> SyscallResult<Option<usize>> {
         while self.can_recv() {
             let (payload, _) = self.recv().expect("Can't recv icmp packet");
-            let icmp_packet = Icmpv4Packet::new(&payload);
+            let icmp_packet = Icmpv4Packet::new_unchecked(&payload);
             //TODO: replace default with actual caps
             let icmp_repr = Icmpv4Repr::parse(&icmp_packet, &Default::default()).unwrap();
 
@@ -269,4 +269,3 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
         }
     }
 }
-
