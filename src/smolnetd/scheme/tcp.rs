@@ -162,7 +162,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                     if tcp_handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
                         return Err(SyscallError::new(syscall::EAGAIN));
                     } else {
-                        return Err(SyscallError::new(syscall::EAGAIN));
+                        Ok(None);
                     }
                 }
                 trace!("TCP creating new listening socket");
