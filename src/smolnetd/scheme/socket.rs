@@ -106,10 +106,10 @@ type WaitQueue = Vec<WaitHandle>;
 
 type WaitQueueMap = BTreeMap<SocketHandle, WaitQueue>;
 
-pub type DupResult<T> = (
+pub type DupResult<T> = Option<(
     SchemeFile<T>,
     Option<(SocketHandle, <T as SchemeSocket>::DataT)>,
-);
+)>;
 
 pub trait SchemeSocket
 where
@@ -639,12 +639,15 @@ where
                     }),
                     None,
                 ),
-                _ => SocketT::dup(
+                _ => match SocketT::dup(
                     &mut self.socket_set.borrow_mut(),
                     file,
                     path,
                     &mut self.scheme_data,
-                )?,
+                )? {
+                    Some(some) => some,
+                    None => return Ok(None),
+                },
             };
 
             if let Some((socket_handle, data)) = update_with {

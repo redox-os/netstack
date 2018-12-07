@@ -269,4 +269,3 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
         }
     }
 }
-

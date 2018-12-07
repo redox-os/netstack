@@ -162,7 +162,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                     if tcp_handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
                         return Err(SyscallError::new(syscall::EAGAIN));
                     } else {
-                        Ok(None);
+                        return Ok(None);
                     }
                 }
                 trace!("TCP creating new listening socket");
@@ -181,7 +181,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                         .expect("Can't listen on local endpoint");
                 }
                 port_set.acquire_port(local_endpoint.port);
-                return Ok((new_handle, Some((new_socket_handle, ()))));
+                return Ok(Some((new_handle, Some((new_socket_handle, ())))));
             } else {
                 return Err(SyscallError::new(syscall::EBADF));
             },
@@ -199,7 +199,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
             port_set.acquire_port(local_endpoint.port);
         }
 
-        Ok((file, None))
+        Ok(Some((file, None)))
     }
 
     fn fpath(&self, _: &SchemeFile<Self>, buf: &mut [u8]) -> SyscallResult<usize> {

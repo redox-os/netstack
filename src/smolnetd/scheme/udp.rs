@@ -171,7 +171,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             port_set.acquire_port(endpoint.port);
         }
 
-        Ok((file, None))
+        Ok(Some((file, None)))
     }
 
     fn fpath(&self, file: &SchemeFile<Self>, buf: &mut [u8]) -> SyscallResult<usize> {
