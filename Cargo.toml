@@ -17,7 +17,7 @@ path = "src/lib/lib.rs"
 [dependencies]
 netutils = { git = "https://gitlab.redox-os.org/redox-os/netutils.git" }
 redox_event = { git = "https://gitlab.redox-os.org/redox-os/event.git" }
-redox_syscall = { git = "https://gitlab.redox-os.org/redox-os/syscall.git" }
+redox_syscall = "0.1"
 byteorder = { version = "1.0", default-features = false }
 dns-parser = "0.7.1"
 
@@ -27,7 +27,8 @@ default-features = false
 features = ["release_max_level_off"]
 
 [dependencies.smoltcp]
-version = "0.5"
+git = "https://github.com/m-labs/smoltcp.git"
+rev = "ed8dce015c45ee6e37c8d671f290a6d9b7fb49ac"
 default-features = false
 features = ["std", "socket-raw", "proto-ipv4", "socket-udp", "socket-tcp", "socket-icmp"]
 
