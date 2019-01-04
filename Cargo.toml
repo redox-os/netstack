@@ -27,8 +27,7 @@ default-features = false
 features = ["release_max_level_off"]
 
 [dependencies.smoltcp]
-git = "https://github.com/m-labs/smoltcp.git"
-rev = "ed8dce015c45ee6e37c8d671f290a6d9b7fb49ac"
+path = "smoltcp"
 default-features = false
 features = ["std", "socket-raw", "proto-ipv4", "socket-udp", "socket-tcp", "socket-icmp"]
 
