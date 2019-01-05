@@ -1,6 +1,7 @@
 use netutils::getcfg;
 use smoltcp;
 use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache, Routes};
+use smoltcp::phy::EthernetTracer;
 use smoltcp::socket::SocketSet as SmoltcpSocketSet;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
@@ -31,7 +32,7 @@ mod icmp;
 mod netcfg;
 
 type SocketSet = SmoltcpSocketSet<'static, 'static, 'static>;
-type Interface = Rc<RefCell<EthernetInterface<'static, 'static, 'static, NetworkDevice>>>;
+type Interface = Rc<RefCell<EthernetInterface<'static, 'static, 'static, EthernetTracer<NetworkDevice>>>>;
 
 const MAX_DURATION: Duration = Duration { millis: ::std::u64::MAX };
 const MIN_DURATION: Duration = Duration { millis: 0 };
@@ -83,12 +84,14 @@ impl Smolnetd {
         let buffer_pool = Rc::new(RefCell::new(BufferPool::new(Self::MAX_PACKET_SIZE)));
         let input_queue = Rc::new(RefCell::new(VecDeque::new()));
         let network_file = Rc::new(RefCell::new(network_file));
-        let network_device = NetworkDevice::new(
+        let network_device = EthernetTracer::new(NetworkDevice::new(
             Rc::clone(&network_file),
             Rc::clone(&input_queue),
             hardware_addr,
             Rc::clone(&buffer_pool),
-        );
+        ), |_timestamp, printer| {
+            trace!("{}", printer)
+        });
         let mut routes = Routes::new(BTreeMap::new());
         routes.add_default_ipv4_route(default_gw).expect("Failed to add default gateway");
         let iface = EthernetInterfaceBuilder::new(network_device)

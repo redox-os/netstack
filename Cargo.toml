@@ -24,12 +24,12 @@ dns-parser = "0.7.1"
 [dependencies.log]
 version = "0.3"
 default-features = false
-features = ["release_max_level_off"]
+features = []
 
 [dependencies.smoltcp]
 path = "smoltcp"
 default-features = false
-features = ["std", "socket-raw", "proto-ipv4", "socket-udp", "socket-tcp", "socket-icmp"]
+features = ["log", "verbose", "std", "socket-raw", "proto-ipv4", "socket-udp", "socket-tcp", "socket-icmp"]
 
 [profile.release]
 lto = true
