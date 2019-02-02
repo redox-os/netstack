@@ -8,7 +8,7 @@ use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address}
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::mem::size_of;
 use std::rc::Rc;
 use std::str::FromStr;
@@ -216,13 +216,15 @@ impl Smolnetd {
         let mut total_frames = 0;
         loop {
             let mut buffer = self.buffer_pool.borrow_mut().get_buffer();
-            let count = self.network_file
-                .borrow_mut()
-                .read(&mut buffer)
-                .map_err(|e| Error::from_io_error(e, "Failed to read from network file"))?;
-            if count == 0 {
-                break;
-            }
+            let count = match self.network_file.borrow_mut().read(&mut buffer) {
+                Ok(count) => count,
+                Err(err) => match err.kind() {
+                    io::ErrorKind::WouldBlock => break,
+                    _ => return Err(
+                        Error::from_io_error(err, "Failed to read from network file")
+                    )
+                }
+            };
             buffer.resize(count);
             self.input_queue.borrow_mut().push_back(buffer);
             total_frames += 1;
