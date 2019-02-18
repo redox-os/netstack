@@ -122,7 +122,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Err(SyscallError::new(syscall::EAGAIN))
         } else {
-            Ok(None) // internally scheduled to re-read
+            Ok(None) // internally scheduled to re-write
         }
     }
 
@@ -136,6 +136,8 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         } else if self.can_recv() {
             let length = self.recv_slice(buf).expect("Can't receive slice");
             Ok(Some(length))
+        } else if !self.may_recv() {
+            Ok(Some(0))
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Err(SyscallError::new(syscall::EAGAIN))
         } else {
