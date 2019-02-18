@@ -123,6 +123,7 @@ where
 
     fn can_send(&self) -> bool;
     fn can_recv(&self) -> bool;
+    fn may_recv(&self) -> bool;
 
     fn hop_limit(&self) -> u8;
     fn set_hop_limit(&mut self, u8);
@@ -214,7 +215,7 @@ where
                 let mut socket_set = self.socket_set.borrow_mut();
                 let socket = socket_set.get::<SocketT>(socket_handle);
 
-                if events & syscall::EVENT_READ == syscall::EVENT_READ && socket.can_recv() {
+                if events & syscall::EVENT_READ == syscall::EVENT_READ && (socket.can_recv() || !socket.may_recv()) {
                     if !*read_notified {
                         post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ, 1)?;
                         *read_notified = true;

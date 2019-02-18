@@ -28,6 +28,10 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
         self.can_recv()
     }
 
+    fn may_recv(&self) -> bool {
+        true
+    }
+
     fn hop_limit(&self) -> u8 {
         self.hop_limit().unwrap_or(64)
     }

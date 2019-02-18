@@ -41,6 +41,10 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
         self.can_recv()
     }
 
+    fn may_recv(&self) -> bool {
+        true
+    }
+
     fn get_setting(
         _file: &SocketFile<Self::DataT>,
         _setting: Self::SettingT,

@@ -26,6 +26,10 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         self.can_recv()
     }
 
+    fn may_recv(&self) -> bool {
+        self.may_recv()
+    }
+
     fn hop_limit(&self) -> u8 {
         self.hop_limit().unwrap_or(64)
     }
