@@ -120,7 +120,7 @@ impl Smolnetd {
 
     pub fn on_network_scheme_event(&mut self) -> Result<Option<()>> {
         if self.read_frames()? > 0 {
-            self.poll().map(Some)?;
+            self.poll()?;
         }
         Ok(None)
     }
