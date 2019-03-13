@@ -492,7 +492,6 @@ where
     }
 
     fn write(&mut self, fd: usize, buf: &[u8]) -> SyscallResult<Option<usize>> {
-        println!("write({}, {:p}, {})", fd, buf.as_ptr(), buf.len());
         let (fd, setting) = {
             let file = self.files
                 .get_mut(&fd)
@@ -513,7 +512,6 @@ where
     }
 
     fn read(&mut self, fd: usize, buf: &mut [u8]) -> SyscallResult<Option<usize>> {
-        println!("read({}, {:p}, {})", fd, buf.as_ptr(), buf.len());
         let (fd, setting) = {
             let file = self.files
                 .get_mut(&fd)
