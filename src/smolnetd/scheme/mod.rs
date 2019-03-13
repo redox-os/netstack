@@ -152,7 +152,8 @@ impl Smolnetd {
     pub fn on_time_event(&mut self) -> Result<Option<()>> {
         let timeout = self.poll()?;
         self.schedule_time_event(timeout)?;
-        Ok(None)
+        //TODO: Fix network scheme to ensure events are not missed
+        self.on_network_scheme_event()
     }
 
     pub fn on_netcfg_scheme_event(&mut self) -> Result<Option<()>> {
