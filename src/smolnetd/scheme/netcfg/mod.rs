@@ -505,7 +505,7 @@ impl SchemeMut for NetCfgScheme {
         } else {
             self.notifier.borrow_mut().unsubscribe(&file.path, fd);
         }
-        Ok(fd)
+        Ok(0)
     }
 
     fn fsync(&mut self, fd: usize) -> SyscallResult<usize> {

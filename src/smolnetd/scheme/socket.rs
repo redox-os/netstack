@@ -9,9 +9,10 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use std::str;
-use syscall::data::TimeSpec;
-use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeBlockMut};
 use syscall;
+use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeBlockMut};
+use syscall::data::TimeSpec;
+use syscall::flag::{EVENT_READ, EVENT_WRITE};
 
 use redox_netstack::error::{Error, Result};
 use super::{post_fevent, SocketSet};
@@ -93,6 +94,39 @@ where
             SchemeFile::Socket(SocketFile { socket_handle, .. })
             | SchemeFile::Setting(SettingFile { socket_handle, .. }) => socket_handle,
         }
+    }
+
+    pub fn events(&mut self, socket_set: &mut SocketSet) -> usize where SocketT: AnySocket<'static, 'static> {
+        let mut revents = 0;
+        if let &mut SchemeFile::Socket(SocketFile {
+            socket_handle,
+            events,
+            ref mut read_notified,
+            ref mut write_notified,
+            ..
+        }) = self
+        {
+            let socket = socket_set.get::<SocketT>(socket_handle);
+
+            if events & syscall::EVENT_READ == syscall::EVENT_READ && (socket.can_recv() || !socket.may_recv()) {
+                if !*read_notified {
+                    *read_notified = true;
+                    revents |= EVENT_READ;
+                }
+            } else {
+                *read_notified = false;
+            }
+
+            if events & syscall::EVENT_WRITE == syscall::EVENT_WRITE && socket.can_send() {
+                if !*write_notified {
+                    *write_notified = true;
+                    revents |= EVENT_WRITE;
+                }
+            } else {
+                *write_notified = false;
+            }
+        }
+        revents
     }
 }
 
@@ -221,34 +255,12 @@ where
 
         // Notify non-blocking sockets
         for (&fd, ref mut file) in &mut self.files {
-            if let &mut SchemeFile::Socket(SocketFile {
-                socket_handle,
-                events,
-                ref mut read_notified,
-                ref mut write_notified,
-                ..
-            }) = *file
-            {
+            let events = {
                 let mut socket_set = self.socket_set.borrow_mut();
-                let socket = socket_set.get::<SocketT>(socket_handle);
-
-                if events & syscall::EVENT_READ == syscall::EVENT_READ && (socket.can_recv() || !socket.may_recv()) {
-                    if !*read_notified {
-                        post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ, 1)?;
-                        *read_notified = true;
-                    }
-                } else {
-                    *read_notified = false;
-                }
-
-                if events & syscall::EVENT_WRITE == syscall::EVENT_WRITE && socket.can_send() {
-                    if !*write_notified {
-                        post_fevent(&mut self.scheme_file, fd, syscall::EVENT_WRITE, 1)?;
-                        *write_notified = true;
-                    }
-                } else {
-                    *write_notified = false;
-                }
+                file.events(&mut socket_set)
+            };
+            if events > 0 {
+                post_fevent(&mut self.scheme_file, fd, events, 1)?;
             }
         }
 
@@ -608,14 +620,16 @@ where
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
         match *file {
-            SchemeFile::Setting(_) => Err(SyscallError::new(syscall::EBADF)),
+            SchemeFile::Setting(_) => return Err(SyscallError::new(syscall::EBADF)),
             SchemeFile::Socket(ref mut file) => {
                 file.events = events;
                 file.read_notified = false; // resend missed events
                 file.write_notified = false;
-                Ok(Some(fd))
             }
         }
+        let mut socket_set = self.socket_set.borrow_mut();
+        let revents = file.events(&mut socket_set);
+        Ok(Some(revents))
     }
 
     fn fsync(&mut self, fd: usize) -> SyscallResult<Option<usize>> {
