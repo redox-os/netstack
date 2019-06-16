@@ -34,10 +34,3 @@ features = ["std", "socket-raw", "proto-ipv4", "socket-udp", "socket-tcp", "sock
 
 [profile.release]
 lto = true
-
-[patch.crates-io]
-libc = { git = "https://gitlab.redox-os.org/redox-os/liblibc.git", branch = "redox-unix" }
-mio = { git = "https://gitlab.redox-os.org/redox-os/mio.git" }
-net2 = { git = "https://gitlab.redox-os.org/redox-os/net2-rs.git", branch = "redox-unix" }
-pbr = { git = "https://gitlab.redox-os.org/redox-os/pb.git", branch = "redox-unix" }
-time = { git = "https://gitlab.redox-os.org/redox-os/time.git", branch = "redox-unix" }
