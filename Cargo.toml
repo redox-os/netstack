@@ -29,7 +29,12 @@ features = ["release_max_level_warn"]
 [dependencies.smoltcp]
 path = "smoltcp"
 default-features = false
-features = ["std", "socket-raw", "proto-ipv4", "socket-udp", "socket-tcp", "socket-icmp"]
+features = [
+    "std",
+    "ethernet",
+    "proto-ipv4",
+    "socket-raw", "socket-icmp", "socket-udp", "socket-tcp"
+]
 #For debugging: "log", "verbose"
 
 [profile.release]
