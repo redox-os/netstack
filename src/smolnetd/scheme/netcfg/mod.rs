@@ -6,7 +6,7 @@ use smoltcp::wire::{IpAddress, EthernetAddress, IpCidr, Ipv4Address};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::rc::Rc;
 use std::mem;
 use std::str::FromStr;
@@ -18,7 +18,7 @@ use syscall;
 
 use self::nodes::*;
 use self::notifier::*;
-use redox_netstack::error::Result;
+use redox_netstack::error::{Error, Result};
 use super::{post_fevent, Interface};
 
 const WRITE_BUFFER_MAX_SIZE: usize = 0xffff;
@@ -360,16 +360,25 @@ impl NetCfgScheme {
     }
 
     pub fn on_scheme_event(&mut self) -> Result<Option<()>> {
-        loop {
+        let result = loop {
             let mut packet = SyscallPacket::default();
-            if self.scheme_file.read(&mut packet)? == 0 {
-                break;
+            match self.scheme_file.read(&mut packet) {
+                Ok(0) => {
+                    //TODO: Cleanup must occur
+                    break Some(());
+                },
+                Ok(_) => (),
+                Err(err) => if err.kind() == ErrorKind::WouldBlock {
+                    break None;
+                } else {
+                    return Err(Error::from(err));
+                }
             }
             self.handle(&mut packet);
             self.scheme_file.write_all(&packet)?;
-        }
+        };
         self.notify_scheduled_fds();
-        Ok(None)
+        Ok(result)
     }
 
     fn notify_scheduled_fds(&mut self) {

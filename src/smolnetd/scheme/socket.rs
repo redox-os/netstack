@@ -2,7 +2,7 @@ use smoltcp::socket::{AnySocket, SocketHandle};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::Deref;
@@ -218,10 +218,19 @@ where
     }
 
     pub fn on_scheme_event(&mut self) -> Result<Option<()>> {
-        loop {
+        let result = loop {
             let mut packet = SyscallPacket::default();
-            if self.scheme_file.read(&mut packet)? == 0 {
-                break;
+            match self.scheme_file.read(&mut packet) {
+                Ok(0) => {
+                    //TODO: Cleanup must occur
+                    break Some(());
+                },
+                Ok(_) => (),
+                Err(err) => if err.kind() == ErrorKind::WouldBlock {
+                    break None;
+                } else {
+                    return Err(Error::from(err));
+                }
             }
             if let Some(a) = self.handle(&mut packet) {
                 packet.a = a;
@@ -244,8 +253,8 @@ where
                     }
                 }
             }
-        }
-        Ok(None)
+        };
+        Ok(result)
     }
 
     pub fn notify_sockets(&mut self) -> Result<()> {

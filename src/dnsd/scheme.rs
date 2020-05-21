@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::collections::VecDeque;
 use std::collections::btree_map::Entry;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::mem;
 use std::os::unix::io::RawFd;
 use std::str;
@@ -327,10 +327,19 @@ impl Dnsd {
     }
 
     pub fn on_dns_file_event(&mut self) -> Result<Option<()>> {
-        loop {
+        let result = loop {
             let mut packet = SyscallPacket::default();
-            if self.dns_file.read(&mut packet)? == 0 {
-                break;
+            match self.dns_file.read(&mut packet) {
+                Ok(0) => {
+                    //TODO: Cleanup must occur
+                    break Some(());
+                },
+                Ok(_) => (),
+                Err(err) => if err.kind() == ErrorKind::WouldBlock {
+                    break None;
+                } else {
+                    return Err(Error::from(err));
+                }
             }
             let a = packet.a;
             self.handle(&mut packet);
@@ -340,8 +349,8 @@ impl Dnsd {
                 packet.a = a;
                 self.handle_block(packet)?;
             }
-        }
-        Ok(None)
+        };
+        Ok(result)
     }
 
     pub fn on_unknown_fd_event(&mut self, fd: RawFd) -> Result<Option<()>> {
