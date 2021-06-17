@@ -15,6 +15,8 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
 
+use syscall::flag::{CloneFlags, EventFlags};
+
 use redox_netstack::error::{Error, Result};
 use redox_netstack::logger;
 use event::EventQueue;
@@ -141,14 +143,14 @@ fn run() -> Result<()> {
 
     event_queue.trigger_all(event::Event {
         fd: 0,
-        flags: 0
+        flags: EventFlags::empty()
     })?;
 
     event_queue.run()
 }
 
 fn main() {
-    if unsafe { syscall::clone(0).unwrap() } == 0 {
+    if unsafe { syscall::clone(CloneFlags::empty()).unwrap() } == 0 {
         logger::init_logger();
 
         if let Err(err) = run() {

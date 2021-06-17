@@ -13,7 +13,7 @@ use std::str::FromStr;
 use std::str;
 use syscall::data::Stat;
 use syscall::flag::{MODE_DIR, MODE_FILE};
-use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
+use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
 use syscall;
 
 use self::nodes::*;
@@ -384,14 +384,13 @@ impl NetCfgScheme {
     fn notify_scheduled_fds(&mut self) {
         let fds_to_notify = self.notifier.borrow_mut().get_notified_fds();
         for fd in fds_to_notify {
-            let _ = post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ, 1);
+            let _ = post_fevent(&mut self.scheme_file, fd, syscall::EVENT_READ.bits(), 1);
         }
     }
 }
 
 impl SchemeMut for NetCfgScheme {
-    fn open(&mut self, url: &[u8], _flags: usize, uid: u32, _gid: u32) -> SyscallResult<usize> {
-        let path = str::from_utf8(url).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
+    fn open(&mut self, path: &str, _flags: usize, uid: u32, _gid: u32) -> SyscallResult<usize> {
         let mut current_node = Rc::clone(&self.root_node);
         for part in path.split('/') {
             if part.is_empty() {
@@ -505,16 +504,16 @@ impl SchemeMut for NetCfgScheme {
         Ok(0)
     }
 
-    fn fevent(&mut self, fd: usize, events: usize) -> SyscallResult<usize> {
+    fn fevent(&mut self, fd: usize, events: SyscallEventFlags) -> SyscallResult<SyscallEventFlags> {
         let file = self.files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
-        if events & syscall::EVENT_READ == syscall::EVENT_READ {
+        if events.contains(syscall::EVENT_READ) {
             self.notifier.borrow_mut().subscribe(&file.path, fd);
         } else {
             self.notifier.borrow_mut().unsubscribe(&file.path, fd);
         }
-        Ok(0)
+        Ok(SyscallEventFlags::empty())
     }
 
     fn fsync(&mut self, fd: usize) -> SyscallResult<usize> {

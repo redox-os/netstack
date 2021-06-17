@@ -1,4 +1,3 @@
-use smoltcp::socket::{AnySocket, SocketHandle};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -9,12 +8,15 @@ use std::ops::Deref;
 use std::ops::DerefMut;
 use std::rc::Rc;
 use std::str;
+
 use syscall;
-use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeBlockMut};
+use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Packet as SyscallPacket, Result as SyscallResult, SchemeBlockMut};
 use syscall::data::TimeSpec;
 use syscall::flag::{EVENT_READ, EVENT_WRITE};
 
 use redox_netstack::error::{Error, Result};
+use smoltcp::socket::{AnySocket, SocketHandle};
+
 use super::{post_fevent, SocketSet};
 
 pub struct NullFile {
@@ -108,19 +110,19 @@ where
         {
             let socket = socket_set.get::<SocketT>(socket_handle);
 
-            if events & syscall::EVENT_READ == syscall::EVENT_READ && (socket.can_recv() || !socket.may_recv()) {
+            if events & syscall::EVENT_READ.bits() == syscall::EVENT_READ.bits() && (socket.can_recv() || !socket.may_recv()) {
                 if !*read_notified {
                     *read_notified = true;
-                    revents |= EVENT_READ;
+                    revents |= EVENT_READ.bits();
                 }
             } else {
                 *read_notified = false;
             }
 
-            if events & syscall::EVENT_WRITE == syscall::EVENT_WRITE && socket.can_send() {
+            if events & syscall::EVENT_WRITE.bits() == syscall::EVENT_WRITE.bits() && socket.can_send() {
                 if !*write_notified {
                     *write_notified = true;
-                    revents |= EVENT_WRITE;
+                    revents |= EVENT_WRITE.bits();
                 }
             } else {
                 *write_notified = false;
@@ -437,9 +439,7 @@ impl<SocketT> syscall::SchemeBlockMut for SocketScheme<SocketT>
 where
     SocketT: SchemeSocket + AnySocket<'static, 'static>,
 {
-    fn open(&mut self, url: &[u8], flags: usize, uid: u32, _gid: u32) -> SyscallResult<Option<usize>> {
-        let path = str::from_utf8(url).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
-
+    fn open(&mut self, path: &str, flags: usize, uid: u32, _gid: u32) -> SyscallResult<Option<usize>> {
         if path.is_empty() {
             let null = NullFile {
                 flags: flags,
@@ -552,14 +552,14 @@ where
     }
 
     fn dup(&mut self, fd: usize, buf: &[u8]) -> SyscallResult<Option<usize>> {
+        let path = str::from_utf8(buf).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
+
         if let Some((flags, uid, gid)) = self.nulls
             .get(&fd)
             .map(|null| (null.flags, null.uid, null.gid))
         {
-            return self.open(buf, flags, uid, gid);
+            return self.open(path, flags, uid, gid);
         }
-
-        let path = str::from_utf8(buf).or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?;
 
         let new_file = {
             let file = self.files
@@ -624,20 +624,20 @@ where
         Ok(Some(id))
     }
 
-    fn fevent(&mut self, fd: usize, events: usize) -> SyscallResult<Option<usize>> {
+    fn fevent(&mut self, fd: usize, events: SyscallEventFlags) -> SyscallResult<Option<SyscallEventFlags>> {
         let file = self.files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
         match *file {
             SchemeFile::Setting(_) => return Err(SyscallError::new(syscall::EBADF)),
             SchemeFile::Socket(ref mut file) => {
-                file.events = events;
+                file.events = events.bits();
                 file.read_notified = false; // resend missed events
                 file.write_notified = false;
             }
         }
         let mut socket_set = self.socket_set.borrow_mut();
-        let revents = file.events(&mut socket_set);
+        let revents = SyscallEventFlags::from_bits_truncate(file.events(&mut socket_set));
         Ok(Some(revents))
     }
 
