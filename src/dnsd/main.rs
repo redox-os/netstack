@@ -17,6 +17,8 @@ use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
 
+use syscall::{CloneFlags, EventFlags};
+
 mod scheme;
 
 fn run() -> Result<()> {
@@ -73,14 +75,14 @@ fn run() -> Result<()> {
 
     event_queue.trigger_all(event::Event {
         fd: 0,
-        flags: 0,
+        flags: EventFlags::empty(),
     })?;
 
     event_queue.run()
 }
 
 fn main() {
-    if unsafe { syscall::clone(0).unwrap() } == 0 {
+    if unsafe { syscall::clone(CloneFlags::empty()).unwrap() } == 0 {
         logger::init_logger();
         if let Err(err) = run() {
             error!("dnsd: {}", err);

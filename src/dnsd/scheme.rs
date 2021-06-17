@@ -13,7 +13,7 @@ use std::str::FromStr;
 use std::rc::Rc;
 use std::net::Ipv4Addr;
 use syscall::data::TimeSpec;
-use syscall::{Error as SyscallError, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
+use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
 use syscall;
 
 use dns_parser::{Builder, Packet as DNSPacket, RRData, ResponseCode};
@@ -417,10 +417,8 @@ impl Dnsd {
 }
 
 impl SchemeMut for Dnsd {
-    fn open(&mut self, url: &[u8], _flags: usize, _uid: u32, _gid: u32) -> SyscallResult<usize> {
-        let domain = str::from_utf8(url)
-            .or_else(|_| Err(SyscallError::new(syscall::EINVAL)))?
-            .to_lowercase();
+    fn open(&mut self, url: &str, _flags: usize, _uid: u32, _gid: u32) -> SyscallResult<usize> {
+        let domain = url.to_lowercase();
         if domain.is_empty() || !Dnsd::validate_domain(&domain) {
             return Err(SyscallError::new(syscall::EINVAL));
         }
@@ -484,8 +482,8 @@ impl SchemeMut for Dnsd {
         }
     }
 
-    fn fevent(&mut self, _fd: usize, _events: usize) -> SyscallResult<usize> {
-        Ok(0)
+    fn fevent(&mut self, _fd: usize, _events: SyscallEventFlags) -> SyscallResult<SyscallEventFlags> {
+        Ok(SyscallEventFlags::empty())
     }
 
     fn fsync(&mut self, _fd: usize) -> SyscallResult<usize> {
