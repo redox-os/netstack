@@ -21,7 +21,7 @@ use syscall::{CloneFlags, EventFlags};
 
 mod scheme;
 
-fn run() -> Result<()> {
+fn run(daemon: redox_daemon::Daemon) -> Result<()> {
     use syscall::flag::*;
 
     let dns_fd = syscall::open(":dns", O_RDWR | O_CREAT | O_NONBLOCK)
@@ -53,6 +53,8 @@ fn run() -> Result<()> {
 
     syscall::setrens(0, 0).expect("dnsd: failed to enter null namespace");
 
+    daemon.ready().expect("dnsd: failed to notify parent");
+
     let dnsd_ = Rc::clone(&dnsd);
 
     event_queue
@@ -82,11 +84,12 @@ fn run() -> Result<()> {
 }
 
 fn main() {
-    if unsafe { syscall::clone(CloneFlags::empty()).unwrap() } == 0 {
+    redox_daemon::Daemon::new(move |daemon| {
         logger::init_logger();
-        if let Err(err) = run() {
+        if let Err(err) = run(daemon) {
             error!("dnsd: {}", err);
             process::exit(1);
         }
-    }
+        process::exit(0);
+    }).expect("dnsd: failed to daemonize");
 }

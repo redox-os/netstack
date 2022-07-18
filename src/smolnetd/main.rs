@@ -27,7 +27,7 @@ mod device;
 mod port_set;
 mod scheme;
 
-fn run() -> Result<()> {
+fn run(daemon: redox_daemon::Daemon) -> Result<()> {
     use syscall::flag::*;
 
     trace!("opening network:");
@@ -91,6 +91,8 @@ fn run() -> Result<()> {
 
     syscall::setrens(0, 0).expect("smolnetd: failed to enter null namespace");
 
+    daemon.ready().expect("smolnetd: failed to notify parent");
+
     let smolnetd_ = Rc::clone(&smolnetd);
 
     event_queue
@@ -150,12 +152,13 @@ fn run() -> Result<()> {
 }
 
 fn main() {
-    if unsafe { syscall::clone(CloneFlags::empty()).unwrap() } == 0 {
+    redox_daemon::Daemon::new(move |daemon| {
         logger::init_logger();
 
-        if let Err(err) = run() {
+        if let Err(err) = run(daemon) {
             error!("smoltcpd: {}", err);
             process::exit(1);
         }
-    }
+        process::exit(0);
+    }).expect("smoltcp: failed to daemonize");
 }

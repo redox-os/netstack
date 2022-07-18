@@ -17,6 +17,7 @@ path = "src/lib/lib.rs"
 [dependencies]
 netutils = { git = "https://gitlab.redox-os.org/redox-os/netutils.git", branch = "redox-unix" }
 redox_event = { git = "https://gitlab.redox-os.org/redox-os/event.git" }
+redox-daemon = "0.1"
 redox_syscall = "0.2.12"
 byteorder = { version = "1.0", default-features = false }
 dns-parser = "0.7.1"
