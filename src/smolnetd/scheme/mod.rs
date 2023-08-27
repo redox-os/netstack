@@ -15,8 +15,8 @@ use std::str::FromStr;
 use syscall::data::TimeSpec;
 use syscall;
 
-use buffer_pool::{Buffer, BufferPool};
-use device::NetworkDevice;
+use crate::buffer_pool::{Buffer, BufferPool};
+use crate::device::NetworkDevice;
 use redox_netstack::error::{Error, Result};
 use self::ip::IpScheme;
 use self::tcp::TcpScheme;

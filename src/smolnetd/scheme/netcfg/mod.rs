@@ -284,7 +284,7 @@ struct NetCfgFile {
     is_dir: bool,
     is_writable: bool,
     is_readable: bool,
-    node_writer: Option<Box<NodeWriter>>,
+    node_writer: Option<Box<dyn NodeWriter>>,
     read_buf: Vec<u8>,
     write_buf: Vec<u8>,
     pos: usize,

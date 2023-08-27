@@ -4,7 +4,7 @@ use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 
-use device::NetworkDevice;
+use crate::device::NetworkDevice;
 use super::{Smolnetd, SocketSet};
 use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
 

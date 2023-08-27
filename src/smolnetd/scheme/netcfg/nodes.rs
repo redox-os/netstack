@@ -3,10 +3,10 @@ use std::rc::Rc;
 use std::collections::BTreeMap;
 use syscall::Result as SyscallResult;
 
-pub type CfgNodeRef = Rc<RefCell<CfgNode>>;
+pub type CfgNodeRef = Rc<RefCell<dyn CfgNode>>;
 
 pub trait NodeWriter {
-    fn write_line(&mut self, &str) -> SyscallResult<()> {
+    fn write_line(&mut self, _: &str) -> SyscallResult<()> {
         Ok(())
     }
 
@@ -74,7 +74,7 @@ pub trait CfgNode {
         None
     }
 
-    fn new_writer(&self) -> Option<Box<NodeWriter>> {
+    fn new_writer(&self) -> Option<Box<dyn NodeWriter>> {
         None
     }
 }
@@ -106,14 +106,14 @@ where
 
 pub struct WONode<W>
 where
-    W: 'static + Fn() -> Box<NodeWriter>,
+    W: 'static + Fn() -> Box<dyn NodeWriter>,
 {
     new_writer: W,
 }
 
 impl<W> CfgNode for WONode<W>
 where
-    W: 'static + Fn() -> Box<NodeWriter>,
+    W: 'static + Fn() -> Box<dyn NodeWriter>,
 {
     fn is_readable(&self) -> bool {
         false
@@ -123,14 +123,14 @@ where
         true
     }
 
-    fn new_writer(&self) -> Option<Box<NodeWriter>> {
+    fn new_writer(&self) -> Option<Box<dyn NodeWriter>> {
         Some((self.new_writer)())
     }
 }
 
 impl<W> WONode<W>
 where
-    W: 'static + Fn() -> Box<NodeWriter>,
+    W: 'static + Fn() -> Box<dyn NodeWriter>,
 {
     pub fn new_ref(new_writer: W) -> CfgNodeRef {
         Rc::new(RefCell::new(WONode { new_writer }))
@@ -140,7 +140,7 @@ where
 pub struct RWNode<F, W>
 where
     F: Fn() -> String,
-    W: 'static + Fn() -> Box<NodeWriter>,
+    W: 'static + Fn() -> Box<dyn NodeWriter>,
 {
     read_fun: F,
     new_writer: W,
@@ -149,7 +149,7 @@ where
 impl<F, W> CfgNode for RWNode<F, W>
 where
     F: Fn() -> String,
-    W: 'static + Fn() -> Box<NodeWriter>,
+    W: 'static + Fn() -> Box<dyn NodeWriter>,
 {
     fn read(&self) -> String {
         (self.read_fun)()
@@ -159,7 +159,7 @@ where
         true
     }
 
-    fn new_writer(&self) -> Option<Box<NodeWriter>> {
+    fn new_writer(&self) -> Option<Box<dyn NodeWriter>> {
         Some((self.new_writer)())
     }
 }
@@ -167,7 +167,7 @@ where
 impl<F, W> RWNode<F, W>
 where
     F: 'static + Fn() -> String,
-    W: 'static + Fn() -> Box<NodeWriter>,
+    W: 'static + Fn() -> Box<dyn NodeWriter>,
 {
     pub fn new_ref(read_fun: F, new_writer: W) -> CfgNodeRef {
         Rc::new(RefCell::new(RWNode {
@@ -221,14 +221,14 @@ macro_rules! cfg_node {
     (wo [ $($c:ident),* ] ( $et:ty , $e:expr ) |$data_i:ident, $line_i:ident|
      $write_line:block |$data_i2:ident| $commit:block) => {
         {
-            $(#[allow(unused_variables)] let $c = $c.clone();)*;
-            let new_writer = move || -> Box<NodeWriter> {
+            $(#[allow(unused_variables)] let $c = $c.clone();)*
+            let new_writer = move || -> Box<dyn NodeWriter> {
                 let write_line = {
-                    $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                    $(#[allow(unused_variables)] let $c = $c.clone();)*
                     move |$data_i: &mut $et, $line_i: &str| $write_line
                 };
                 let commit = {
-                    $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                    $(#[allow(unused_variables)] let $c = $c.clone();)*
                     move |$data_i2: &mut $et| $commit
                 };
                 let data: $et = $e;
@@ -241,17 +241,17 @@ macro_rules! cfg_node {
      $write_line:block |$data_i2:ident| $commit:block) => {
         {
             let read_fun = {
-                $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                $(#[allow(unused_variables)] let $c = $c.clone();)*
                 move || $read_fun
             };
-            $(#[allow(unused_variables)] let $c = $c.clone();)*;
-            let new_writer = move || -> Box<NodeWriter> {
+            $(#[allow(unused_variables)] let $c = $c.clone();)*
+            let new_writer = move || -> Box<dyn NodeWriter> {
                 let write_line = {
-                    $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                    $(#[allow(unused_variables)] let $c = $c.clone();)*
                     move |$data_i: &mut $et, $line_i: &str| $write_line
                 };
                 let commit = {
-                    $(#[allow(unused_variables)] let $c = $c.clone();)*;
+                    $(#[allow(unused_variables)] let $c = $c.clone();)*
                     move |$data_i2: &mut $et| $commit
                 };
                 let data: $et = $e;

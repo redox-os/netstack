@@ -1,5 +1,3 @@
-#![feature(nll)]
-
 extern crate dns_parser;
 extern crate event;
 #[macro_use]
@@ -16,8 +14,6 @@ use std::fs::File;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
-
-use syscall::{CloneFlags, EventFlags};
 
 mod scheme;
 

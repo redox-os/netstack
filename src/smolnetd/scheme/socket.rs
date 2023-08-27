@@ -160,31 +160,31 @@ where
     fn may_recv(&self) -> bool;
 
     fn hop_limit(&self) -> u8;
-    fn set_hop_limit(&mut self, u8);
+    fn set_hop_limit(&mut self, hop_limit: u8);
 
-    fn get_setting(&SocketFile<Self::DataT>, Self::SettingT, &mut [u8]) -> SyscallResult<usize>;
-    fn set_setting(&mut SocketFile<Self::DataT>, Self::SettingT, &[u8]) -> SyscallResult<usize>;
+    fn get_setting(file: &SocketFile<Self::DataT>, setting: Self::SettingT, buf: &mut [u8]) -> SyscallResult<usize>;
+    fn set_setting(file: &mut SocketFile<Self::DataT>, setting: Self::SettingT, buf: &[u8]) -> SyscallResult<usize>;
 
     fn new_socket(
-        &mut SocketSet,
-        &str,
-        u32,
-        &mut Self::SchemeDataT,
+        sockets: &mut SocketSet,
+        path: &str,
+        uid: u32,
+        data: &mut Self::SchemeDataT,
     ) -> SyscallResult<(SocketHandle, Self::DataT)>;
 
-    fn close_file(&self, &SchemeFile<Self>, &mut Self::SchemeDataT) -> SyscallResult<()>;
+    fn close_file(&self, file: &SchemeFile<Self>, data: &mut Self::SchemeDataT) -> SyscallResult<()>;
 
-    fn write_buf(&mut self, &mut SocketFile<Self::DataT>, buf: &[u8]) -> SyscallResult<Option<usize>>;
+    fn write_buf(&mut self, file: &mut SocketFile<Self::DataT>, buf: &[u8]) -> SyscallResult<Option<usize>>;
 
-    fn read_buf(&mut self, &mut SocketFile<Self::DataT>, buf: &mut [u8]) -> SyscallResult<Option<usize>>;
+    fn read_buf(&mut self, file: &mut SocketFile<Self::DataT>, buf: &mut [u8]) -> SyscallResult<Option<usize>>;
 
-    fn fpath(&self, &SchemeFile<Self>, &mut [u8]) -> SyscallResult<usize>;
+    fn fpath(&self, file: &SchemeFile<Self>, buf: &mut [u8]) -> SyscallResult<usize>;
 
     fn dup(
-        &mut SocketSet,
-        &mut SchemeFile<Self>,
-        &str,
-        &mut Self::SchemeDataT,
+        sockets: &mut SocketSet,
+        file: &mut SchemeFile<Self>,
+        path: &str,
+        data: &mut Self::SchemeDataT,
     ) -> SyscallResult<DupResult<Self>>;
 }
 
@@ -242,7 +242,7 @@ where
                     Ok(timeout) => {
                         self.wait_queue.push(WaitHandle {
                             until: timeout,
-                            packet: packet,
+                            packet,
                         });
                     },
                     Err(err) => {
@@ -442,8 +442,8 @@ where
     fn open(&mut self, path: &str, flags: usize, uid: u32, _gid: u32) -> SyscallResult<Option<usize>> {
         if path.is_empty() {
             let null = NullFile {
-                flags: flags,
-                uid: uid,
+                flags,
+                uid,
                 gid: _gid,
             };
 
