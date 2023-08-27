@@ -3,7 +3,7 @@ use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 
-use port_set::PortSet;
+use crate::port_set::PortSet;
 use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
 use super::{parse_endpoint, SocketSet};
 

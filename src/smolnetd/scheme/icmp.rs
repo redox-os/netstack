@@ -6,8 +6,8 @@ use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 use byteorder::{ByteOrder, NetworkEndian};
 
-use device::NetworkDevice;
-use port_set::PortSet;
+use crate::device::NetworkDevice;
+use crate::port_set::PortSet;
 use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
 use super::{Smolnetd, SocketSet};
 

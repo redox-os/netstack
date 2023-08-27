@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use smoltcp::time::Instant;
 use smoltcp::wire::EthernetAddress;
-use buffer_pool::{Buffer, BufferPool};
+use crate::buffer_pool::{Buffer, BufferPool};
 
 struct NetworkDeviceData {
     network_file: Rc<RefCell<File>>,

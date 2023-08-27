@@ -15,8 +15,6 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
 
-use syscall::flag::{CloneFlags, EventFlags};
-
 use redox_netstack::error::{Error, Result};
 use redox_netstack::logger;
 use event::EventQueue;
