@@ -1,12 +1,12 @@
 use netutils::getcfg;
 use smoltcp;
-use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache, Routes};
-use smoltcp::phy::EthernetTracer;
-use smoltcp::socket::SocketSet as SmoltcpSocketSet;
+use smoltcp::iface::{Interface as SmoltcpInterface, Routes, Config};
+use smoltcp::phy::Tracer;
+use crate::scheme::smoltcp::iface::SocketSet as SmoltcpSocketSet;
 use smoltcp::time::{Duration, Instant};
-use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address};
+use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address, IpListenEndpoint, HardwareAddress};
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::mem::size_of;
@@ -31,14 +31,15 @@ mod udp;
 mod icmp;
 mod netcfg;
 
-type SocketSet = SmoltcpSocketSet<'static, 'static, 'static>;
-type Interface = Rc<RefCell<EthernetInterface<'static, 'static, 'static, EthernetTracer<NetworkDevice>>>>;
+type SocketSet = SmoltcpSocketSet<'static>;
+type Interface = Rc<RefCell<SmoltcpInterface>>;
 
-const MAX_DURATION: Duration = Duration { millis: ::std::u64::MAX };
-const MIN_DURATION: Duration = Duration { millis: 0 };
+const MAX_DURATION: Duration = Duration::from_millis(u64::MAX);
+const MIN_DURATION: Duration = Duration::from_millis(0);
 
 pub struct Smolnetd {
     network_file: Rc<RefCell<File>>,
+    network_device: Tracer<NetworkDevice>,
     time_file: File,
 
     iface: Interface,
@@ -58,8 +59,8 @@ pub struct Smolnetd {
 impl Smolnetd {
     const MAX_PACKET_SIZE: usize = 2048;
     const SOCKET_BUFFER_SIZE: usize = 128; //packets
-    const MIN_CHECK_TIMEOUT: Duration = Duration { millis: 10 };
-    const MAX_CHECK_TIMEOUT: Duration = Duration { millis: 500 };
+    const MIN_CHECK_TIMEOUT: Duration = Duration::from_millis(10);
+    const MAX_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
 
     pub fn new(
         network_file: File,
@@ -84,7 +85,7 @@ impl Smolnetd {
         let buffer_pool = Rc::new(RefCell::new(BufferPool::new(Self::MAX_PACKET_SIZE)));
         let input_queue = Rc::new(RefCell::new(VecDeque::new()));
         let network_file = Rc::new(RefCell::new(network_file));
-        let network_device = EthernetTracer::new(NetworkDevice::new(
+        let mut network_device = Tracer::new(NetworkDevice::new(
             Rc::clone(&network_file),
             Rc::clone(&input_queue),
             hardware_addr,
@@ -92,25 +93,23 @@ impl Smolnetd {
         ), |_timestamp, printer| {
             trace!("{}", printer)
         });
-        let mut routes = Routes::new(BTreeMap::new());
-        routes.add_default_ipv4_route(default_gw).expect("Failed to add default gateway");
-        let iface = EthernetInterfaceBuilder::new(network_device)
-            .neighbor_cache(NeighborCache::new(BTreeMap::new()))
-            .ethernet_addr(hardware_addr)
-            .ip_addrs(protocol_addrs)
-            .routes(routes)
-            .finalize();
+        let config = Config::new(HardwareAddress::Ethernet(hardware_addr));
+        let mut iface = SmoltcpInterface::new(config, &mut network_device, Instant::now());
+        iface.update_ip_addrs(|ip_addrs| ip_addrs.extend(protocol_addrs));
+        iface.routes_mut().add_default_ipv4_route(default_gw).expect("Failed to add default gateway");
+
         let iface = Rc::new(RefCell::new(iface));
         let socket_set = Rc::new(RefCell::new(SocketSet::new(vec![])));
         Smolnetd {
             iface: Rc::clone(&iface),
+            network_device,
             socket_set: Rc::clone(&socket_set),
             timer: ::std::time::Instant::now(),
             time_file,
-            ip_scheme: IpScheme::new(Rc::clone(&socket_set), ip_file),
-            udp_scheme: UdpScheme::new(Rc::clone(&socket_set), udp_file),
-            tcp_scheme: TcpScheme::new(Rc::clone(&socket_set), tcp_file),
-            icmp_scheme: IcmpScheme::new(Rc::clone(&socket_set), icmp_file),
+            ip_scheme: IpScheme::new(Rc::clone(&iface), Rc::clone(&socket_set), ip_file),
+            udp_scheme: UdpScheme::new(Rc::clone(&iface), Rc::clone(&socket_set), udp_file),
+            tcp_scheme: TcpScheme::new(Rc::clone(&iface), Rc::clone(&socket_set), tcp_file),
+            icmp_scheme: IcmpScheme::new(Rc::clone(&iface), Rc::clone(&socket_set), icmp_file),
             netcfg_scheme: NetCfgScheme::new(Rc::clone(&iface), netcfg_file),
             input_queue,
             network_file,
@@ -190,23 +189,22 @@ impl Smolnetd {
                     break MIN_DURATION;
                 }
                 iter_limit -= 1;
-                match iface.poll(&mut socket_set, timestamp) {
-                    Ok(_) | Err(smoltcp::Error::Unrecognized) => (),
-                    Err(e) => {
-                        error!("poll error: {}", e);
-                        break MIN_DURATION;
-                    }
-                }
-                match iface.poll_delay(&socket_set, timestamp) {
-                    Some(Duration { millis: 0 }) => { }
+
+                // TODO: Check what if the bool returned by poll can be useful 
+                iface.poll(timestamp, &mut self.network_device, &mut socket_set);
+
+                match iface.poll_delay(timestamp, &socket_set) {
+                    Some(delay) if delay == Duration::ZERO => { }
                     Some(delay) => {
                         break ::std::cmp::min(MAX_DURATION, delay)
                     }
                     None => break MAX_DURATION
-                }
+                };
             }
         };
+
         self.notify_sockets()?;
+
         Ok(::std::cmp::min(
             ::std::cmp::max(Smolnetd::MIN_CHECK_TIMEOUT, timeout),
             Smolnetd::MAX_CHECK_TIMEOUT,
@@ -257,17 +255,16 @@ fn post_fevent(scheme_file: &mut File, fd: usize, event: usize, data_len: usize)
         .map_err(|e| Error::from_io_error(e, "failed to post fevent"))
 }
 
-fn parse_endpoint(socket: &str) -> IpEndpoint {
+fn parse_endpoint(socket: &str) -> IpListenEndpoint {
     let mut socket_parts = socket.split(':');
-    let host = IpAddress::Ipv4(
-        Ipv4Address::from_str(socket_parts.next().unwrap_or(""))
-            .unwrap_or_else(|_| Ipv4Address::new(0, 0, 0, 0)),
-    );
+    let host = 
+        Ipv4Address::from_str(socket_parts.next().unwrap_or("")).ok().filter(|addr| !addr.is_unspecified()).map(IpAddress::Ipv4);
+    
 
     let port = socket_parts
         .next()
         .unwrap_or("")
         .parse::<u16>()
         .unwrap_or(0);
-    IpEndpoint::new(host, port)
+    IpListenEndpoint{ addr: host, port}
 }

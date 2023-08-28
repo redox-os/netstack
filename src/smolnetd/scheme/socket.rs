@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::marker::PhantomData;
 use std::mem;
-use std::ops::Deref;
+use std::ops::{Deref, SubAssign};
 use std::ops::DerefMut;
 use std::rc::Rc;
 use std::str;
@@ -15,7 +16,9 @@ use syscall::data::TimeSpec;
 use syscall::flag::{EVENT_READ, EVENT_WRITE};
 
 use redox_netstack::error::{Error, Result};
-use smoltcp::socket::{AnySocket, SocketHandle};
+use smoltcp::socket::AnySocket;
+use crate::scheme::smoltcp::iface::SocketHandle;
+use super::Interface;
 
 use super::{post_fevent, SocketSet};
 
@@ -98,7 +101,7 @@ where
         }
     }
 
-    pub fn events(&mut self, socket_set: &mut SocketSet) -> usize where SocketT: AnySocket<'static, 'static> {
+    pub fn events(&mut self, socket_set: &mut SocketSet) -> usize where SocketT: AnySocket<'static> {
         let mut revents = 0;
         if let &mut SchemeFile::Socket(SocketFile {
             socket_handle,
@@ -170,6 +173,7 @@ where
         path: &str,
         uid: u32,
         data: &mut Self::SchemeDataT,
+        iface: &Interface
     ) -> SyscallResult<(SocketHandle, Self::DataT)>;
 
     fn close_file(&self, file: &SchemeFile<Self>, data: &mut Self::SchemeDataT) -> SyscallResult<()>;
@@ -190,11 +194,13 @@ where
 
 pub struct SocketScheme<SocketT>
 where
-    SocketT: SchemeSocket + AnySocket<'static, 'static>,
+    SocketT: SchemeSocket + AnySocket<'static>,
 {
     next_fd: usize,
     nulls: BTreeMap<usize, NullFile>,
     files: BTreeMap<usize, SchemeFile<SocketT>>,
+    ref_counts: BTreeMap<SocketHandle, usize>,
+    iface: Interface,
     socket_set: Rc<RefCell<SocketSet>>,
     scheme_file: File,
     wait_queue: WaitQueue,
@@ -204,13 +210,15 @@ where
 
 impl<SocketT> SocketScheme<SocketT>
 where
-    SocketT: SchemeSocket + AnySocket<'static, 'static>,
+    SocketT: SchemeSocket + AnySocket<'static>,
 {
-    pub fn new(socket_set: Rc<RefCell<SocketSet>>, scheme_file: File) -> SocketScheme<SocketT> {
+    pub fn new(iface: Interface, socket_set: Rc<RefCell<SocketSet>>, scheme_file: File) -> SocketScheme<SocketT> {
         SocketScheme {
             next_fd: 1,
             nulls: BTreeMap::new(),
+            iface,
             files: BTreeMap::new(),
+            ref_counts: BTreeMap::new(),
             socket_set,
             scheme_data: SocketT::new_scheme_data(),
             scheme_file,
@@ -424,7 +432,7 @@ where
             }
             Setting::Ttl => if let Some(hop_limit) = buf.get(0) {
                 let mut socket_set = self.socket_set.borrow_mut();
-                let mut socket = socket_set.get::<SocketT>(file.socket_handle);
+                let socket = socket_set.get_mut::<SocketT>(file.socket_handle);
                 socket.set_hop_limit(*hop_limit);
                 Ok(1)
             } else {
@@ -437,7 +445,7 @@ where
 
 impl<SocketT> syscall::SchemeBlockMut for SocketScheme<SocketT>
 where
-    SocketT: SchemeSocket + AnySocket<'static, 'static>,
+    SocketT: SchemeSocket + AnySocket<'static>,
 {
     fn open(&mut self, path: &str, flags: usize, uid: u32, _gid: u32) -> SyscallResult<Option<usize>> {
         if path.is_empty() {
@@ -459,6 +467,7 @@ where
                 path,
                 uid,
                 &mut self.scheme_data,
+                &self.iface
             )?;
 
             let file = SchemeFile::Socket(SocketFile {
@@ -475,6 +484,7 @@ where
             let id = self.next_fd;
             self.next_fd += 1;
 
+            self.ref_counts.insert(socket_handle, 1);
             self.files.insert(id, file);
 
             Ok(Some(id))
@@ -506,9 +516,29 @@ where
              }| a != fd,
         );
 
-        socket_set.release(socket_handle);
-        //TODO: removing sockets in release should make prune unnecessary
-        socket_set.prune();
+        let remove = match self.ref_counts.entry(socket_handle) {
+            Entry::Vacant(_) => {
+                warn!("Closing a socket_handle with no ref");
+                true
+            },
+            Entry::Occupied(mut e) => if *e.get() == 0 {
+                warn!("Closing a socket_handle with no ref");
+                e.remove();
+                true
+            } else {
+                *e.get_mut() -= 1;
+                if *e.get() == 0 {
+                    e.remove();
+                    true
+                } else {
+                    false
+                }
+            },
+        };
+
+        if remove {
+            socket_set.remove(socket_handle);
+        }
         Ok(Some(0))
     }
 
@@ -524,8 +554,8 @@ where
                 }
                 SchemeFile::Socket(ref mut file) => {
                     let mut socket_set = self.socket_set.borrow_mut();
-                    let mut socket = socket_set.get::<SocketT>(file.socket_handle);
-                    return SocketT::write_buf(&mut socket, file, buf);
+                    let socket = socket_set.get_mut::<SocketT>(file.socket_handle);
+                    return SocketT::write_buf(socket, file, buf);
                 }
             }
         };
@@ -543,8 +573,8 @@ where
                 }
                 SchemeFile::Socket(ref mut file) => {
                     let mut socket_set = self.socket_set.borrow_mut();
-                    let mut socket = socket_set.get::<SocketT>(file.socket_handle);
-                    return SocketT::read_buf(&mut socket, file, buf);
+                    let socket = socket_set.get_mut::<SocketT>(file.socket_handle);
+                    return SocketT::read_buf(socket, file, buf);
                 }
             }
         };
@@ -609,10 +639,10 @@ where
                     file.socket_handle = socket_handle;
                     file.data = data;
                 } else {
-                    self.socket_set.borrow_mut().retain(file.socket_handle());
+                    *self.ref_counts.entry(file.socket_handle()).or_insert(0) += 1;
                 }
             } else {
-                self.socket_set.borrow_mut().retain(file.socket_handle());
+                *self.ref_counts.entry(file.socket_handle()).or_insert(0) += 1;
             }
             new_handle
         };

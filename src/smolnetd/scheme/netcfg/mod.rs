@@ -82,7 +82,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                 ro [iface] || {
                     let mut gateway = None;
                     iface.borrow_mut().routes_mut().update(|map| {
-                        gateway = map.get(&gateway_cidr()).map(|route| route.via_router);
+                        gateway = map.iter().find(|route| route.cidr == gateway_cidr()).map(|route| route.via_router)
                     });
                     if let Some(ip) = gateway {
                         format!("default via {}\n", ip)
@@ -136,16 +136,17 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                         let mut iface = iface.borrow_mut();
                         let mut gateway = None;
                         iface.routes_mut().update(|map| {
-                            gateway = map.get(&gateway_cidr()).map(|route| route.via_router);
+                            gateway = map.iter().find(|route| route.cidr == gateway_cidr()).map(|route| route.via_router)
                         });
-                        if gateway != Some(IpAddress::Ipv4(default_gw)) {
-                            return Err(SyscallError::new(syscall::EINVAL));
+                        match gateway {
+                            None => Err(SyscallError::new(syscall::EINVAL)),
+                            Some(addr) if addr != IpAddress::Ipv4(default_gw) => Err(SyscallError::new(syscall::EINVAL)),
+                            Some(_) => {
+                                iface.routes_mut().remove_default_ipv4_route();
+                                notifier.borrow_mut().schedule_notify("route/list");
+                                Ok(())
+                            }
                         }
-                        iface.routes_mut().update(|map| {
-                            map.remove(&gateway_cidr());
-                        });
-                        notifier.borrow_mut().schedule_notify("route/list");
-                        Ok(())
                     } else {
                         Err(SyscallError::new(syscall::EINVAL))
                     }
@@ -157,7 +158,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                 "mac" => {
                     rw [iface, notifier] (Option<EthernetAddress>, None)
                     || {
-                        format!("{}\n", iface.borrow().ethernet_addr())
+                        format!("{}\n", iface.borrow().hardware_addr())
                     }
                     |cur_value, line| {
                         if cur_value.is_none() {
@@ -174,7 +175,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                     }
                     |cur_value| {
                         if let Some(mac) = *cur_value {
-                            iface.borrow_mut().set_ethernet_addr(mac);
+                            iface.borrow_mut().set_hardware_addr(smoltcp::wire::HardwareAddress::Ethernet(mac));
                             notifier.borrow_mut().schedule_notify("ifaces/eth0/mac");
                         }
                         Ok(())
@@ -208,7 +209,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                                 let mut cidrs = vec![];
                                 mem::swap(cur_value, &mut cidrs);
                                 iface.update_ip_addrs(|s| {
-                                    *s = From::from(cidrs);
+                                    *s = cidrs.into_iter().collect();
                                 });
                                 notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
                             }
@@ -233,7 +234,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                                 cidrs.insert(0, *cidr);
                             }
                             iface.update_ip_addrs(|s| {
-                                *s = From::from(cidrs);
+                                *s = cidrs.into_iter().collect();
                             });
                             notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
                             Ok(())
@@ -261,7 +262,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                                 }
                             }
                             iface.update_ip_addrs(|s| {
-                                *s = From::from(cidrs);
+                                *s = cidrs.into_iter().collect();
                             });
                             notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
                             Ok(())

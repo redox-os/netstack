@@ -45,9 +45,9 @@ pub struct RxToken {
 }
 
 impl smoltcp::phy::RxToken for RxToken {
-    fn consume<R, F>(mut self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(mut self, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+        F: FnOnce(&mut [u8]) -> R,
     {
         f(&mut self.buffer)
     }
@@ -58,14 +58,14 @@ pub struct TxToken {
 }
 
 impl smoltcp::phy::TxToken for TxToken {
-    fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> smoltcp::Result<R>
+    fn consume<R, F>(self, len: usize, f: F) -> R
     where
-        F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+        F: FnOnce(&mut [u8]) -> R,
     {
         let data = self.data.borrow_mut();
         let mut buffer = data.buffer_pool.borrow_mut().get_buffer();
         buffer.resize(len);
-        let res = f(&mut buffer)?;
+        let res = f(&mut buffer);
 
         let mut loopback = false;
         if let Ok(mut frame) = smoltcp::wire::EthernetFrame::new_checked(&mut buffer) {
@@ -78,19 +78,19 @@ impl smoltcp::phy::TxToken for TxToken {
         if loopback {
             data.input_queue.borrow_mut().push_back(buffer.move_out());
         } else {
+            // TODO: Handle error
             data.network_file
                 .borrow_mut()
-                .write(&buffer)
-                .map_err(|_| smoltcp::Error::Dropped)?;
+                .write(&buffer);
         }
 
-        Ok(res)
+        res
     }
 }
 
-impl<'a> smoltcp::phy::Device<'a> for NetworkDevice {
-    type RxToken = RxToken;
-    type TxToken = TxToken;
+impl smoltcp::phy::Device for NetworkDevice {
+    type RxToken<'a> = RxToken;
+    type TxToken<'a> = TxToken;
 
     fn capabilities(&self) -> smoltcp::phy::DeviceCapabilities {
         let mut limits = smoltcp::phy::DeviceCapabilities::default();
@@ -99,7 +99,7 @@ impl<'a> smoltcp::phy::Device<'a> for NetworkDevice {
         limits
     }
 
-    fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
+    fn receive(&mut self, _timestamp: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         let data = self.data.borrow_mut();
         let buffer = data.input_queue.borrow_mut().pop_front();
 
@@ -115,7 +115,7 @@ impl<'a> smoltcp::phy::Device<'a> for NetworkDevice {
         }
     }
 
-    fn transmit(&'a mut self) -> Option<Self::TxToken> {
+    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
         Some(TxToken {
             data: Rc::clone(&self.data),
         })

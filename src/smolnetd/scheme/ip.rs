@@ -1,16 +1,17 @@
-use smoltcp::socket::{RawPacketMetadata, RawSocket, RawSocketBuffer, SocketHandle};
+use smoltcp::socket::raw::{PacketMetadata as RawPacketMetadata, Socket as RawSocket, PacketBuffer as RawSocketBuffer};
+use smoltcp::iface::SocketHandle;
 use smoltcp::wire::{IpProtocol, IpVersion};
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 
 use crate::device::NetworkDevice;
-use super::{Smolnetd, SocketSet};
+use super::{Smolnetd, SocketSet, Interface};
 use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
 
-pub type IpScheme = SocketScheme<RawSocket<'static, 'static>>;
+pub type IpScheme = SocketScheme<RawSocket<'static>>;
 
-impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
+impl<'a> SchemeSocket for RawSocket<'a> {
     type SchemeDataT = ();
     type DataT = ();
     type SettingT = ();
@@ -58,6 +59,7 @@ impl<'a, 'b> SchemeSocket for RawSocket<'a, 'b> {
         path: &str,
         uid: u32,
         _: &mut Self::SchemeDataT,
+        iface: &Interface
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         if uid != 0 {
             return Err(SyscallError::new(syscall::EACCES));

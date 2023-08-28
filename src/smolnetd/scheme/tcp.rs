@@ -1,11 +1,13 @@
-use smoltcp::socket::{SocketHandle, TcpSocket, TcpSocketBuffer};
+use smoltcp::iface::SocketHandle;
+use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer};
+use smoltcp::wire::IpEndpoint;
 use std::str;
-use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
+use syscall::{Error as SyscallError, Result as SyscallResult};
 
-use crate::port_set::PortSet;
 use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
-use super::{parse_endpoint, SocketSet};
+use super::{parse_endpoint, SocketSet, Interface};
+use crate::port_set::PortSet;
 
 pub type TcpScheme = SocketScheme<TcpSocket<'static>>;
 
@@ -59,6 +61,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
+        iface: &Interface
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         trace!("TCP open {}", path);
         let mut parts = path.split('/');
@@ -85,12 +88,12 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
 
         let socket_handle = socket_set.add(socket);
 
-        let mut tcp_socket = socket_set.get::<TcpSocket>(socket_handle);
+        let tcp_socket = socket_set.get_mut::<TcpSocket>(socket_handle);
 
         if remote_endpoint.is_specified() {
             trace!("Connecting tcp {} {}", local_endpoint, remote_endpoint);
             tcp_socket
-                .connect(remote_endpoint, local_endpoint)
+                .connect(iface.borrow_mut().context(), IpEndpoint::new(remote_endpoint.addr.unwrap(), remote_endpoint.port), local_endpoint)
                 .expect("Can't connect tcp socket ");
         } else {
             trace!("Listening tcp {}", local_endpoint);
@@ -108,7 +111,9 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         port_set: &mut Self::SchemeDataT,
     ) -> SyscallResult<()> {
         if let SchemeFile::Socket(_) = *file {
-            port_set.release_port(self.local_endpoint().port);
+            if let Some(endpoint) = self.local_endpoint() {
+                port_set.release_port(endpoint.port);
+            }
         }
         Ok(())
     }
@@ -163,34 +168,43 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         };
 
         let file = match path {
-            "listen" => if let SchemeFile::Socket(ref tcp_handle) = *file {
-                if !is_active {
-                    if tcp_handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
-                        return Err(SyscallError::new(syscall::EAGAIN));
-                    } else {
-                        return Ok(None);
+            "listen" => {
+                if let SchemeFile::Socket(ref tcp_handle) = *file {
+                    if !is_active {
+                        if tcp_handle.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
+                            return Err(SyscallError::new(syscall::EAGAIN));
+                        } else {
+                            return Ok(None);
+                        }
                     }
-                }
-                trace!("TCP creating new listening socket");
-                let new_handle = SchemeFile::Socket(tcp_handle.clone_with_data(()));
+                    trace!("TCP creating new listening socket");
+                    let new_handle = SchemeFile::Socket(tcp_handle.clone_with_data(()));
 
-                let rx_packets = vec![0; 0xffff];
-                let tx_packets = vec![0; 0xffff];
-                let rx_buffer = TcpSocketBuffer::new(rx_packets);
-                let tx_buffer = TcpSocketBuffer::new(tx_packets);
-                let socket = TcpSocket::new(rx_buffer, tx_buffer);
-                let new_socket_handle = socket_set.add(socket);
-                {
-                    let mut tcp_socket = socket_set.get::<TcpSocket>(new_socket_handle);
-                    tcp_socket
-                        .listen(local_endpoint)
-                        .expect("Can't listen on local endpoint");
+                    let rx_packets = vec![0; 0xffff];
+                    let tx_packets = vec![0; 0xffff];
+                    let rx_buffer = TcpSocketBuffer::new(rx_packets);
+                    let tx_buffer = TcpSocketBuffer::new(tx_packets);
+                    let socket = TcpSocket::new(rx_buffer, tx_buffer);
+                    let new_socket_handle = socket_set.add(socket);
+                    {
+                        let tcp_socket = socket_set.get_mut::<TcpSocket>(new_socket_handle);
+                        tcp_socket
+                            .listen(
+                                local_endpoint
+                                    .expect("Socket was active so local endpoint must be set"),
+                            )
+                            .expect("Can't listen on local endpoint");
+                    }
+                    port_set.acquire_port(
+                        local_endpoint
+                            .expect("Socket was active so local endpoint must be set")
+                            .port,
+                    );
+                    return Ok(Some((new_handle, Some((new_socket_handle, ())))));
+                } else {
+                    return Err(SyscallError::new(syscall::EBADF));
                 }
-                port_set.acquire_port(local_endpoint.port);
-                return Ok(Some((new_handle, Some((new_socket_handle, ())))));
-            } else {
-                return Err(SyscallError::new(syscall::EBADF));
-            },
+            }
             _ => {
                 trace!("TCP dup unknown {}", path);
                 if let SchemeFile::Socket(ref tcp_handle) = *file {
@@ -202,14 +216,21 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         };
 
         if let SchemeFile::Socket(_) = file {
-            port_set.acquire_port(local_endpoint.port);
+            if let Some(local_endpoint) = local_endpoint {
+                port_set.acquire_port(local_endpoint.port);
+            }
         }
 
         Ok(Some((file, None)))
     }
 
     fn fpath(&self, _: &SchemeFile<Self>, buf: &mut [u8]) -> SyscallResult<usize> {
-        let path = format!("tcp:{}/{}", self.remote_endpoint(), self.local_endpoint());
+        let path = match (self.remote_endpoint(), self.local_endpoint()) {
+            (Some(remote_endpoint), Some(local_endpoint)) => format!("tcp:{}/{}", remote_endpoint, local_endpoint),
+            (Some(remote_endpoint), None) => format!("tcp:{}/none", remote_endpoint),
+            (None, Some(local_endpoint)) => format!("tcp:none/{}", local_endpoint),
+            (None, None) => "tcp:none/none".into(),
+        };
         let path = path.as_bytes();
 
         let mut i = 0;

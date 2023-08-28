@@ -81,7 +81,7 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 
 fn main() {
     redox_daemon::Daemon::new(move |daemon| {
-        logger::init_logger();
+        logger::init_logger("dnsd");
         if let Err(err) = run(daemon) {
             error!("dnsd: {}", err);
             process::exit(1);
