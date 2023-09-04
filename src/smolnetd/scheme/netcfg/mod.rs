@@ -158,7 +158,8 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                 "mac" => {
                     rw [iface, notifier] (Option<EthernetAddress>, None)
                     || {
-                        format!("{}\n", iface.borrow().hardware_addr())
+                        // format!("{}\n", iface.borrow().hardware_addr())
+                        String::new()
                     }
                     |cur_value, line| {
                         if cur_value.is_none() {
@@ -175,7 +176,7 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                     }
                     |cur_value| {
                         if let Some(mac) = *cur_value {
-                            iface.borrow_mut().set_hardware_addr(smoltcp::wire::HardwareAddress::Ethernet(mac));
+                            // iface.borrow_mut().set_hardware_addr(smoltcp::wire::HardwareAddress::Ethernet(mac));
                             notifier.borrow_mut().schedule_notify("ifaces/eth0/mac");
                         }
                         Ok(())

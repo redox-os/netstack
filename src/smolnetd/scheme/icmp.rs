@@ -7,10 +7,10 @@ use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 use byteorder::{ByteOrder, NetworkEndian};
 
-use crate::device::NetworkDevice;
 use crate::port_set::PortSet;
-use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
-use super::{Smolnetd, SocketSet, Interface};
+use crate::router::Router;
+use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme, Context};
+use super::{Smolnetd, SocketSet};
 
 pub type IcmpScheme = SocketScheme<IcmpSocket<'static>>;
 
@@ -75,7 +75,7 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
         path: &str,
         _uid: u32,
         ident_set: &mut Self::SchemeDataT,
-        iface: &Interface
+        _context: &Context
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         use std::str::FromStr;
 
@@ -95,11 +95,11 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
                 let socket = IcmpSocket::new(
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
                     ),
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
                     )
                 );
                 let handle = socket_set.add(socket);
@@ -127,11 +127,11 @@ impl<'a> SchemeSocket for IcmpSocket<'a> {
                 let socket = IcmpSocket::new(
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
                     ),
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
                     )
                 );
                 let handle = socket_set.add(socket);

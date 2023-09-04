@@ -6,8 +6,8 @@ use std::str;
 use syscall;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 
-use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
-use super::{parse_endpoint, Interface, SocketSet};
+use super::socket::{Context, DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
+use super::{parse_endpoint, SocketSet};
 use crate::port_set::PortSet;
 
 pub type TcpScheme = SocketScheme<TcpSocket<'static>>;
@@ -62,7 +62,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
-        iface: &Interface,
+        context: &Context,
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         trace!("TCP open {}", path);
         let mut parts = path.split('/');
@@ -92,10 +92,27 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
         let tcp_socket = socket_set.get_mut::<TcpSocket>(socket_handle);
 
         let listen_enpoint = if remote_endpoint.is_specified() {
+            let local_endpoint_addr = match local_endpoint.addr {
+                Some(addr) if !addr.is_unspecified() => Some(addr),
+                _ => {
+                    let route_table = context.route_table.borrow();
+                    let addr = route_table
+                        .lookup_src_addr(&remote_endpoint.addr.expect("Checked in is_specified"));
+                    if matches!(addr, None) {
+                        error!("Opening a TCP connection with a probably invalid source IP as no route have been found for destination: {}", remote_endpoint);
+                    }
+                    addr
+                }
+            };
+            let local_endpoint = IpListenEndpoint {
+                addr: local_endpoint_addr,
+                port: local_endpoint.port,
+            };
+
             trace!("Connecting tcp {} {}", local_endpoint, remote_endpoint);
             tcp_socket
                 .connect(
-                    iface.borrow_mut().context(),
+                    context.iface.borrow_mut().context(),
                     IpEndpoint::new(remote_endpoint.addr.unwrap(), remote_endpoint.port),
                     local_endpoint,
                 )
@@ -264,11 +281,13 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                     data: Some(endpoint),
                     ..
                 }),
-            ) => if endpoint.is_specified() {
-                write!(&mut path, "{}", endpoint).unwrap()
-            } else {
-                write!(&mut path, "0.0.0.0:{}", endpoint.port).unwrap()
-            },
+            ) => {
+                if endpoint.is_specified() {
+                    write!(&mut path, "{}", endpoint).unwrap()
+                } else {
+                    write!(&mut path, "0.0.0.0:{}", endpoint.port).unwrap()
+                }
+            }
             _ => path.push_str(unspecified),
         }
         trace!("fpath: {}", path);

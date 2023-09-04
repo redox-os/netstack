@@ -5,9 +5,9 @@ use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 
-use crate::device::NetworkDevice;
 use crate::port_set::PortSet;
-use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
+use crate::router::Router;
+use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme, Context};
 use super::{parse_endpoint, Smolnetd, SocketSet, Interface};
 
 pub type UdpScheme = SocketScheme<UdpSocket<'static>>;
@@ -62,7 +62,7 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
-        _iface: &Interface
+        _context: &Context
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         let mut parts = path.split('/');
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
@@ -74,11 +74,11 @@ impl<'a> SchemeSocket for UdpSocket<'a> {
 
         let rx_buffer = UdpSocketBuffer::new(
             vec![UdpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
         );
         let tx_buffer = UdpSocketBuffer::new(
             vec![UdpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
         );
         let udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
 

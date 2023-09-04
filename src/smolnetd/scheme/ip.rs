@@ -5,9 +5,10 @@ use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 
-use crate::device::NetworkDevice;
-use super::{Smolnetd, SocketSet, Interface};
-use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
+use crate::router::Router;
+
+use super::{Smolnetd, SocketSet};
+use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme, Context};
 
 pub type IpScheme = SocketScheme<RawSocket<'static>>;
 
@@ -59,7 +60,7 @@ impl<'a> SchemeSocket for RawSocket<'a> {
         path: &str,
         uid: u32,
         _: &mut Self::SchemeDataT,
-        iface: &Interface
+        _context: &Context
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         if uid != 0 {
             return Err(SyscallError::new(syscall::EACCES));
@@ -69,11 +70,11 @@ impl<'a> SchemeSocket for RawSocket<'a> {
 
         let rx_buffer = RawSocketBuffer::new(
             vec![RawPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
         );
         let tx_buffer = RawSocketBuffer::new(
             vec![RawPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
         );
         let ip_socket = RawSocket::new(
             IpVersion::Ipv4,

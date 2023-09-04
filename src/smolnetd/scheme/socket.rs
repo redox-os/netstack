@@ -19,11 +19,17 @@ use syscall::{
 };
 
 use super::Interface;
+use crate::router::route_table::RouteTable;
 use crate::scheme::smoltcp::iface::SocketHandle;
 use redox_netstack::error::{Error, Result};
 use smoltcp::socket::AnySocket;
 
 use super::{post_fevent, SocketSet};
+
+pub struct Context {
+    pub iface: Interface,
+    pub route_table: Rc<RefCell<RouteTable>>,
+}
 
 pub struct NullFile {
     pub flags: usize,
@@ -192,7 +198,7 @@ where
         path: &str,
         uid: u32,
         data: &mut Self::SchemeDataT,
-        iface: &Interface,
+        context: &Context,
     ) -> SyscallResult<(SocketHandle, Self::DataT)>;
 
     fn close_file(
@@ -231,7 +237,7 @@ where
     nulls: BTreeMap<usize, NullFile>,
     files: BTreeMap<usize, SchemeFile<SocketT>>,
     ref_counts: BTreeMap<SocketHandle, usize>,
-    iface: Interface,
+    context: Context,
     socket_set: Rc<RefCell<SocketSet>>,
     scheme_file: File,
     wait_queue: WaitQueue,
@@ -245,13 +251,13 @@ where
 {
     pub fn new(
         iface: Interface,
+        route_table: Rc<RefCell<RouteTable>>,
         socket_set: Rc<RefCell<SocketSet>>,
         scheme_file: File,
     ) -> SocketScheme<SocketT> {
         SocketScheme {
             next_fd: 1,
             nulls: BTreeMap::new(),
-            iface,
             files: BTreeMap::new(),
             ref_counts: BTreeMap::new(),
             socket_set,
@@ -259,6 +265,7 @@ where
             scheme_file,
             wait_queue: Vec::new(),
             _phantom_socket: PhantomData,
+            context: Context { iface, route_table },
         }
     }
 
@@ -514,7 +521,7 @@ where
                 path,
                 uid,
                 &mut self.scheme_data,
-                &self.iface,
+                &self.context,
             )?;
 
             let file = SchemeFile::Socket(SocketFile {
@@ -606,7 +613,12 @@ where
                 SchemeFile::Socket(ref mut file) => {
                     let mut socket_set = self.socket_set.borrow_mut();
                     let socket = socket_set.get_mut::<SocketT>(file.socket_handle);
-                    return SocketT::write_buf(socket, file, buf);
+                    let ret = SocketT::write_buf(socket, file, buf);
+                    match ret {
+                        Ok(None) => {}
+                        _ => file.write_notified = false,
+                    }
+                    return ret;
                 }
             }
         };
@@ -626,7 +638,14 @@ where
                 SchemeFile::Socket(ref mut file) => {
                     let mut socket_set = self.socket_set.borrow_mut();
                     let socket = socket_set.get_mut::<SocketT>(file.socket_handle);
-                    return SocketT::read_buf(socket, file, buf);
+                    
+                    let ret = SocketT::read_buf(socket, file, buf);
+                    match ret {
+                        Ok(None) => {}
+                        _ => file.read_notified = false
+                    }
+
+                    return ret;
                 }
             }
         };

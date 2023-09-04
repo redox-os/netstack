@@ -27,16 +27,17 @@ dns-parser = "0.7.1"
 [dependencies.log]
 version = "0.4"
 default-features = false
-features = ["release_max_level_warn"]
+features = ["release_max_level_debug"]
 
 [dependencies.smoltcp]
 version = "0.10.0"
 default-features = false
 features = [
     "std",
-    "medium-ethernet",
+    "medium-ethernet", "medium-ip",
     "proto-ipv4",
     "socket-raw", "socket-icmp", "socket-udp", "socket-tcp",
+    "iface-max-addr-count-8",
     "log"
 ]
 #For debugging: "log", "verbose"
