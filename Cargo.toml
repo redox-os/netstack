@@ -27,7 +27,7 @@ dns-parser = "0.7.1"
 [dependencies.log]
 version = "0.4"
 default-features = false
-features = ["release_max_level_debug"]
+features = ["release_max_level_warn"]
 
 [dependencies.smoltcp]
 version = "0.10.0"
