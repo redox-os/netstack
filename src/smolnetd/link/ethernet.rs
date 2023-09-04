@@ -341,8 +341,6 @@ impl LinkDevice for EthernetLink {
                 continue;
             }
 
-            error!("Incomming packet {}, {}", repr.dst_addr, repr.ethertype);
-
             match repr.ethertype {
                 EthernetProtocol::Ipv4 => {
                     self.input_buffer = input_buffer;
