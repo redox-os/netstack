@@ -259,6 +259,8 @@ impl Smolnetd {
                 // TODO: Check what if the bool returned by poll can be useful
                 iface.poll(timestamp, &mut self.router_device, &mut socket_set);
 
+                self.router_device.get_mut().dispatch(timestamp);
+
                 match iface.poll_delay(timestamp, &socket_set) {
                     Some(delay) if delay == Duration::ZERO => {}
                     Some(delay) => break ::std::cmp::min(MAX_DURATION, delay),

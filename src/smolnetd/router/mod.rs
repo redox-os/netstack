@@ -42,11 +42,6 @@ impl Router {
     pub const MTU: usize = 1486;
 
     pub fn poll(&mut self, now: Instant) {
-        self.dispatch_outgoing(now);
-        self.process_incoming(now);
-    }
-
-    fn process_incoming(&mut self, now: Instant) {
         for dev in self.devices.borrow_mut().iter_mut() {
             if self.rx_buffer.is_full() {
                 break;
@@ -69,7 +64,7 @@ impl Router {
         }
     }
 
-    fn dispatch_outgoing(&mut self, now: Instant) {
+    pub fn dispatch(&mut self, now: Instant) {
         while let Ok(((), packet)) = self.tx_buffer.dequeue() {
             if let Ok(mut packet) = smoltcp::wire::Ipv4Packet::new_checked(packet) {
                 let dst_addr = IpAddress::Ipv4(packet.dst_addr());
