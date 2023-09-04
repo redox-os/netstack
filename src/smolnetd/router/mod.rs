@@ -41,6 +41,14 @@ impl Router {
 
     pub const MTU: usize = 1486;
 
+    pub fn can_recv(&self) -> bool {
+        let mut can_recv = false;
+        for dev in self.devices.borrow().iter() {
+            can_recv |= dev.can_recv();
+        }
+        can_recv
+    }
+
     pub fn poll(&mut self, now: Instant) {
         for dev in self.devices.borrow_mut().iter_mut() {
             if self.rx_buffer.is_full() {

@@ -42,4 +42,8 @@ impl LinkDevice for LoopbackDevice {
     fn name(&self) -> &std::rc::Rc<str> {
         &self.name
     }
+
+    fn can_recv(&self) -> bool {
+        !self.buffer.is_empty()
+    }
 }

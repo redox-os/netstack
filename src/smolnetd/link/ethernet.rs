@@ -352,4 +352,9 @@ impl LinkDevice for EthernetLink {
     fn name(&self) -> &Rc<str> {
         &self.name
     }
+
+    fn can_recv(&self) -> bool {
+        // We don't buffer any packets so we can't receive immediatly
+        false
+    }
 }

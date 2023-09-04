@@ -21,6 +21,9 @@ pub trait LinkDevice {
 
     /// Returns the LinkDevice display name used to refer to it and for lookups
     fn name(&self) -> &Rc<str>;
+
+    /// Returns wether this device have packets pending
+    fn can_recv(&self) -> bool;
 }
 
 #[derive(Default)]

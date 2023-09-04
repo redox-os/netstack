@@ -261,11 +261,13 @@ impl Smolnetd {
 
                 self.router_device.get_mut().dispatch(timestamp);
 
-                match iface.poll_delay(timestamp, &socket_set) {
-                    Some(delay) if delay == Duration::ZERO => {}
-                    Some(delay) => break ::std::cmp::min(MAX_DURATION, delay),
-                    None => break MAX_DURATION,
-                };
+                if !self.router_device.get_ref().can_recv() {
+                    match iface.poll_delay(timestamp, &socket_set) {
+                        Some(delay) if delay == Duration::ZERO => {}
+                        Some(delay) => break ::std::cmp::min(MAX_DURATION, delay),
+                        None => break MAX_DURATION,
+                    };
+                } 
             }
         };
 
