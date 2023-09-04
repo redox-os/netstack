@@ -31,6 +31,8 @@ enum ArpState {
 
 type PacketBuffer = smoltcp::storage::PacketBuffer<'static, IpAddress>;
 
+const EMPTY_MAC: EthernetAddress = EthernetAddress([0;6]);
+
 pub struct EthernetLink {
     name: Rc<str>,
     neighbor_cache: BTreeMap<IpAddress, Neighbor>,
@@ -333,10 +335,13 @@ impl LinkDevice for EthernetLink {
                 continue;
             };
 
-            if !repr.dst_addr.is_broadcast() && repr.dst_addr != self.hardware_address {
+            // We let EMPTY_MAC pass because somehow this is the mac used when net=redir is used
+            if !repr.dst_addr.is_broadcast() && repr.dst_addr != EMPTY_MAC && repr.dst_addr != self.hardware_address {
                 // Drop packets which are not for us
                 continue;
             }
+
+            error!("Incomming packet {}, {}", repr.dst_addr, repr.ethertype);
 
             match repr.ethertype {
                 EthernetProtocol::Ipv4 => {

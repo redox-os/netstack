@@ -226,10 +226,7 @@ impl<'a> SchemeSocket for TcpSocket<'a> {
                     {
                         let tcp_socket = socket_set.get_mut::<TcpSocket>(new_socket_handle);
                         tcp_socket
-                            .listen(
-                                local_endpoint
-                                    .expect("Socket was active so local endpoint must be set"),
-                            )
+                            .listen(listen_enpoint)
                             .expect("Can't listen on local endpoint");
                     }
                     // We got a new connection to the socket so acquire the port
