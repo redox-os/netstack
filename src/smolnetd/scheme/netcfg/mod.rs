@@ -2,7 +2,7 @@
 mod nodes;
 mod notifier;
 
-use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr};
+use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -20,7 +20,7 @@ use syscall::{
 };
 
 use crate::link::DeviceList;
-use crate::router::route_table::{self, RouteTable, Rule};
+use crate::router::route_table::{RouteTable, Rule};
 
 use self::nodes::*;
 use self::notifier::*;

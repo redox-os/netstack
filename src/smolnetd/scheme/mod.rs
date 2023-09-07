@@ -10,10 +10,9 @@ use smoltcp::iface::{Config, Interface as SmoltcpInterface};
 use smoltcp::phy::Tracer;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address, Ipv4Cidr,
+    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address, 
 };
 use std::cell::RefCell;
-use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::mem::size_of;
@@ -27,7 +26,6 @@ use self::ip::IpScheme;
 use self::netcfg::NetCfgScheme;
 use self::tcp::TcpScheme;
 use self::udp::UdpScheme;
-use crate::buffer_pool::{Buffer, BufferPool};
 use redox_netstack::error::{Error, Result};
 
 mod icmp;
@@ -46,8 +44,6 @@ const MIN_DURATION: Duration = Duration::from_millis(0);
 pub struct Smolnetd {
     router_device: Tracer<Router>,
     iface: Interface,
-    link_devices: Rc<RefCell<DeviceList>>,
-    route_table: Rc<RefCell<RouteTable>>,
     time_file: File,
 
     socket_set: Rc<RefCell<SocketSet>>,
@@ -58,9 +54,6 @@ pub struct Smolnetd {
     tcp_scheme: TcpScheme,
     icmp_scheme: IcmpScheme,
     netcfg_scheme: NetCfgScheme,
-
-    input_queue: Rc<RefCell<VecDeque<Buffer>>>,
-    buffer_pool: Rc<RefCell<BufferPool>>,
 }
 
 impl Smolnetd {
@@ -86,9 +79,6 @@ impl Smolnetd {
 
         let default_gw = Ipv4Address::from_str(getcfg("ip_router").unwrap().trim())
             .expect("Can't parse the 'ip_router' cfg.");
-
-        let buffer_pool = Rc::new(RefCell::new(BufferPool::new(Self::MAX_PACKET_SIZE)));
-        let input_queue = Rc::new(RefCell::new(VecDeque::new()));
 
         let devices = Rc::new(RefCell::new(DeviceList::default()));
         let route_table = Rc::new(RefCell::new(RouteTable::default()));
@@ -129,10 +119,8 @@ impl Smolnetd {
         Smolnetd {
             iface: Rc::clone(&iface),
             router_device: network_device,
-            route_table: Rc::clone(&route_table),
             socket_set: Rc::clone(&socket_set),
             timer: ::std::time::Instant::now(),
-            link_devices: Rc::clone(&devices),
             time_file,
             ip_scheme: IpScheme::new(
                 Rc::clone(&iface),
@@ -164,8 +152,6 @@ impl Smolnetd {
                 Rc::clone(&route_table),
                 Rc::clone(&devices),
             ),
-            input_queue,
-            buffer_pool,
         }
     }
 

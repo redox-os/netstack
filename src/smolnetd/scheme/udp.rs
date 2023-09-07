@@ -8,7 +8,7 @@ use syscall;
 use crate::port_set::PortSet;
 use crate::router::Router;
 use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme, Context};
-use super::{parse_endpoint, Smolnetd, SocketSet, Interface};
+use super::{parse_endpoint, Smolnetd, SocketSet};
 
 pub type UdpScheme = SocketScheme<UdpSocket<'static>>;
 
