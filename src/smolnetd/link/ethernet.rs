@@ -8,7 +8,7 @@ use smoltcp::storage::PacketMetadata;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{
     ArpOperation, ArpPacket, ArpRepr, EthernetAddress, EthernetFrame, EthernetProtocol,
-    EthernetRepr, IpAddress, Ipv4Address, Ipv4Cidr,
+    EthernetRepr, IpAddress, IpCidr, Ipv4Address, Ipv4Cidr,
 };
 
 use super::LinkDevice;
@@ -31,7 +31,7 @@ enum ArpState {
 
 type PacketBuffer = smoltcp::storage::PacketBuffer<'static, IpAddress>;
 
-const EMPTY_MAC: EthernetAddress = EthernetAddress([0;6]);
+const EMPTY_MAC: EthernetAddress = EthernetAddress([0; 6]);
 
 pub struct EthernetLink {
     name: Rc<str>,
@@ -41,8 +41,8 @@ pub struct EthernetLink {
     input_buffer: Vec<u8>,
     output_buffer: Vec<u8>,
     network_file: File,
-    hardware_address: EthernetAddress,
-    ip_address: Ipv4Cidr,
+    hardware_address: Option<EthernetAddress>,
+    ip_address: Option<Ipv4Cidr>,
 }
 
 impl EthernetLink {
@@ -54,12 +54,7 @@ impl EthernetLink {
     const NEIGHBOR_LIVE_TIME: Duration = Duration::from_secs(60);
     const ARP_SILENCE_TIME: Duration = Duration::from_secs(1);
 
-    pub fn new(
-        name: &str,
-        network_file: File,
-        hardware_address: EthernetAddress,
-        ip_address: Ipv4Cidr,
-    ) -> Self {
+    pub fn new(name: &str, network_file: File) -> Self {
         let waiting_packets = PacketBuffer::new(
             vec![PacketMetadata::EMPTY; Self::MAX_WAITING_PACKET_COUNT],
             vec![0u8; Self::WAITING_PACKET_BUFFER_SIZE],
@@ -69,8 +64,8 @@ impl EthernetLink {
             name: name.into(),
             network_file,
             waiting_packets,
-            hardware_address,
-            ip_address,
+            hardware_address: None,
+            ip_address: None,
             input_buffer: vec![0u8; Self::MTU],
             output_buffer: Vec::with_capacity(Self::MTU),
             arp_state: Default::default(),
@@ -82,8 +77,12 @@ impl EthernetLink {
     where
         F: FnOnce(&mut [u8]),
     {
+        let Some(hardware_address) = self.hardware_address else {
+            return;
+        };
+
         let repr = EthernetRepr {
-            src_addr: self.hardware_address,
+            src_addr: hardware_address,
             dst_addr: dst,
             ethertype: proto,
         };
@@ -104,6 +103,14 @@ impl EthernetLink {
     }
 
     fn process_arp(&mut self, packet: &[u8], now: Instant) {
+        let Some(hardware_address) = self.hardware_address else {
+            return;
+        };
+
+        let Some(ip_addr) = self.ip_address else {
+            return;
+        };
+
         let Ok(repr) = ArpPacket::new_checked(packet).and_then(|packet| ArpRepr::parse(&packet)) else {
             debug!("Dropped incomming arp packet on {} (Malformed)", self.name);
             return;
@@ -117,7 +124,7 @@ impl EthernetLink {
                 target_hardware_addr,
                 target_protocol_addr,
             } => {
-                if self.hardware_address != target_hardware_addr {
+                if hardware_address != target_hardware_addr {
                     // Only process packet that are for us
                     return;
                 }
@@ -129,8 +136,8 @@ impl EthernetLink {
                 if !source_hardware_addr.is_unicast() || !source_protocol_addr.is_unicast() {
                     return;
                 }
-                
-                if !self.ip_address.contains_addr(&target_protocol_addr) {
+
+                if !ip_addr.contains_addr(&target_protocol_addr) {
                     return;
                 }
 
@@ -145,8 +152,8 @@ impl EthernetLink {
                 if let ArpOperation::Request = operation {
                     let response = ArpRepr::EthernetIpv4 {
                         operation: ArpOperation::Reply,
-                        source_hardware_addr: self.hardware_address,
-                        source_protocol_addr: self.ip_address.address(),
+                        source_hardware_addr: hardware_address,
+                        source_protocol_addr: ip_addr.address(),
                         target_hardware_addr: source_hardware_addr,
                         target_protocol_addr: source_protocol_addr,
                     };
@@ -246,6 +253,14 @@ impl EthernetLink {
     }
 
     fn send_arp(&mut self, now: Instant) {
+        let Some(hardware_address) = self.hardware_address else {
+            return;
+        };
+
+        let Some(ip_address) = self.ip_address else {
+            return;
+        };
+
         match self.arp_state {
             ArpState::Discovered => {}
             ArpState::Discovering { silent_until, .. } if silent_until > now => {}
@@ -259,8 +274,8 @@ impl EthernetLink {
             } => {
                 let arp_repr = ArpRepr::EthernetIpv4 {
                     operation: ArpOperation::Request,
-                    source_hardware_addr: self.hardware_address,
-                    source_protocol_addr: self.ip_address.address(),
+                    source_hardware_addr: hardware_address,
+                    source_protocol_addr: ip_address.address(),
                     target_hardware_addr: EthernetAddress::BROADCAST,
                     target_protocol_addr: target,
                 };
@@ -281,10 +296,9 @@ impl EthernetLink {
 
 impl LinkDevice for EthernetLink {
     fn send(&mut self, next_hop: IpAddress, packet: &[u8], now: Instant) {
-
-        let local_broadcast = match self.ip_address.broadcast() {
+        let local_broadcast = match self.ip_address.and_then(|cidr| cidr.broadcast()) {
             Some(addr) => IpAddress::Ipv4(addr) == next_hop,
-            None => false
+            None => false,
         };
 
         if local_broadcast || next_hop.is_broadcast() {
@@ -317,6 +331,10 @@ impl LinkDevice for EthernetLink {
     }
 
     fn recv(&mut self, now: Instant) -> Option<&[u8]> {
+        let Some(hardware_address) = self.hardware_address else {
+            return None;
+        };
+
         let mut input_buffer = std::mem::replace(&mut self.input_buffer, Vec::new());
         loop {
             if let Err(e) = self.network_file.read(&mut input_buffer) {
@@ -336,7 +354,10 @@ impl LinkDevice for EthernetLink {
             };
 
             // We let EMPTY_MAC pass because somehow this is the mac used when net=redir is used
-            if !repr.dst_addr.is_broadcast() && repr.dst_addr != EMPTY_MAC && repr.dst_addr != self.hardware_address {
+            if !repr.dst_addr.is_broadcast()
+                && repr.dst_addr != EMPTY_MAC
+                && repr.dst_addr != hardware_address
+            {
                 // Drop packets which are not for us
                 continue;
             }
@@ -359,5 +380,22 @@ impl LinkDevice for EthernetLink {
     fn can_recv(&self) -> bool {
         // We don't buffer any packets so we can't receive immediatly
         false
+    }
+
+    fn mac_address(&self) -> Option<EthernetAddress> {
+        self.hardware_address
+    }
+
+    fn set_mac_address(&mut self, addr: EthernetAddress) {
+        self.hardware_address = Some(addr)
+    }
+
+    fn ip_address(&self) -> Option<IpCidr> {
+        Some(IpCidr::Ipv4(self.ip_address?))
+    }
+
+    fn set_ip_address(&mut self, addr: IpCidr) {
+        let IpCidr::Ipv4(addr) = addr;
+        self.ip_address = Some(addr);
     }
 }

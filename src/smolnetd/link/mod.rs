@@ -4,7 +4,7 @@ pub mod ethernet;
 use std::rc::Rc;
 
 use smoltcp::time::Instant;
-use smoltcp::wire::IpAddress;
+use smoltcp::wire::{IpAddress, EthernetAddress, IpCidr};
 
 /// Represent a link layer device (eth0, loopback...)
 pub trait LinkDevice {
@@ -24,6 +24,12 @@ pub trait LinkDevice {
 
     /// Returns wether this device have packets pending
     fn can_recv(&self) -> bool;
+
+    fn mac_address(&self) -> Option<EthernetAddress>;
+    fn set_mac_address(&mut self, addr: EthernetAddress);
+
+    fn ip_address(&self) -> Option<IpCidr>;
+    fn set_ip_address(&mut self, addr: IpCidr);
 }
 
 #[derive(Default)]

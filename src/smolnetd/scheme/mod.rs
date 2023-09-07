@@ -80,10 +80,7 @@ impl Smolnetd {
     ) -> Smolnetd {
         let hardware_addr = EthernetAddress::from_str(getcfg("mac").unwrap().trim())
             .expect("Can't parse the 'mac' cfg");
-        let local_ip =
-            IpAddress::from_str(getcfg("ip").unwrap().trim()).expect("Can't parse the 'ip' cfg.");
         let protocol_addrs = vec![
-            IpCidr::new(local_ip, 24),
             IpCidr::new(IpAddress::v4(127, 0, 0, 1), 8),
         ];
 
@@ -119,27 +116,12 @@ impl Smolnetd {
             "127.0.0.1".parse().unwrap(),
         ));
 
-        let IpAddress::Ipv4(local_ip) = local_ip;
-        let eth0 = EthernetLink::new(
+
+        let mut eth0 = EthernetLink::new(
             "eth0",
             network_file,
-            hardware_addr,
-            Ipv4Cidr::new(local_ip, 24),
         );
-
-        route_table.borrow_mut().insert_rule(Rule::new(
-            IpCidr::new(IpAddress::Ipv4(local_ip), 24),
-            None,
-            Rc::clone(eth0.name()),
-            IpAddress::Ipv4(local_ip),
-        ));
-
-        route_table.borrow_mut().insert_rule(Rule::new(
-            "0.0.0.0/0".parse().unwrap(),
-            Some(IpAddress::Ipv4(default_gw)),
-            Rc::clone(eth0.name()),
-            IpAddress::Ipv4(local_ip),
-        ));
+        eth0.set_mac_address(hardware_addr);
 
         devices.borrow_mut().push(loopback);
         devices.borrow_mut().push(eth0);
@@ -150,7 +132,7 @@ impl Smolnetd {
             route_table: Rc::clone(&route_table),
             socket_set: Rc::clone(&socket_set),
             timer: ::std::time::Instant::now(),
-            link_devices: devices,
+            link_devices: Rc::clone(&devices),
             time_file,
             ip_scheme: IpScheme::new(
                 Rc::clone(&iface),
@@ -176,7 +158,12 @@ impl Smolnetd {
                 Rc::clone(&socket_set),
                 icmp_file,
             ),
-            netcfg_scheme: NetCfgScheme::new(Rc::clone(&iface), netcfg_file),
+            netcfg_scheme: NetCfgScheme::new(
+                Rc::clone(&iface),
+                netcfg_file,
+                Rc::clone(&route_table),
+                Rc::clone(&devices),
+            ),
             input_queue,
             buffer_pool,
         }
@@ -267,7 +254,7 @@ impl Smolnetd {
                         Some(delay) => break ::std::cmp::min(MAX_DURATION, delay),
                         None => break MAX_DURATION,
                     };
-                } 
+                }
             }
         };
 
