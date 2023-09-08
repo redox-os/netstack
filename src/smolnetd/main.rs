@@ -1,5 +1,3 @@
-#![feature(drain_filter)]
-
 extern crate event;
 #[macro_use]
 extern crate log;
