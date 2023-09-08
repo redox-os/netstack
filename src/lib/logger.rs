@@ -1,22 +1,16 @@
-use log::{set_logger_raw, Log, LogLevelFilter, LogMetadata, LogRecord};
+use redox_log::{OutputBuilder, RedoxLogger};
 
-struct Logger;
-
-impl Log for Logger {
-    fn enabled(&self, _: &LogMetadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &LogRecord) {
-        println!("{}: {}", record.target(), record.args());
-    }
-}
-
-pub fn init_logger() {
-    unsafe {
-        set_logger_raw(|max_log_level| {
-            max_log_level.set(LogLevelFilter::Trace);
-            &Logger
-        }).expect("Can't initialize logger");
+pub fn init_logger(process_name: &str) {
+    if let Err(_) = RedoxLogger::new()
+            .with_output(
+                OutputBuilder::stdout()
+                    .with_ansi_escape_codes()
+                    .flush_on_newline(true)
+                    .with_filter(log::LevelFilter::Trace)
+                    .build(),
+            )
+            .with_process_name(process_name.into())
+            .enable() {
+        eprintln!("{process_name}: Failed to init logger")
     }
 }

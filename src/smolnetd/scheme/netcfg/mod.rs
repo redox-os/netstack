@@ -2,24 +2,30 @@
 mod nodes;
 mod notifier;
 
-use smoltcp::wire::{IpAddress, EthernetAddress, IpCidr, Ipv4Address};
+use smoltcp::wire::{EthernetAddress, IpAddress, IpCidr, Ipv4Address};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
-use std::rc::Rc;
 use std::mem;
-use std::str::FromStr;
+use std::rc::Rc;
 use std::str;
+use std::str::FromStr;
+use syscall;
 use syscall::data::Stat;
 use syscall::flag::{MODE_DIR, MODE_FILE};
-use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
-use syscall;
+use syscall::{
+    Error as SyscallError, EventFlags as SyscallEventFlags, Packet as SyscallPacket,
+    Result as SyscallResult, SchemeMut,
+};
+
+use crate::link::DeviceList;
+use crate::router::route_table::{RouteTable, Rule};
 
 use self::nodes::*;
 use self::notifier::*;
-use redox_netstack::error::{Error, Result};
 use super::{post_fevent, Interface};
+use redox_netstack::error::{Error, Result};
 
 const WRITE_BUFFER_MAX_SIZE: usize = 0xffff;
 
@@ -28,27 +34,44 @@ fn gateway_cidr() -> IpCidr {
     IpCidr::new(IpAddress::v4(0, 0, 0, 0), 0)
 }
 
-fn parse_default_gw(value: &str) -> SyscallResult<Ipv4Address> {
-    let mut routes = value.lines();
-    if let Some(route) = routes.next() {
-        if !routes.next().is_none() {
-            return Err(SyscallError::new(syscall::EINVAL));
-        }
-        let mut words = route.split_whitespace();
-        if let Some("default") = words.next() {
-            if let Some("via") = words.next() {
-                if let Some(ip) = words.next() {
-                    return Ipv4Address::from_str(ip)
-                        .map_err(|_| SyscallError::new(syscall::EINVAL));
-                }
-            }
-        }
+fn parse_route(value: &str, route_table: &RouteTable) -> SyscallResult<Rule> {
+    let mut parts = value.split_whitespace();
+    let cidr_str = parts.next().ok_or(SyscallError::new(syscall::EINVAL))?;
+    let cidr = match cidr_str {
+        "default" => gateway_cidr(),
+        cidr_str => cidr_str
+            .parse()
+            .map_err(|_| SyscallError::new(syscall::EINVAL))?,
+    };
+
+    let via: IpAddress = match parts.next().ok_or(SyscallError::new(syscall::EINVAL))? {
+        "via" => parts
+            .next()
+            .ok_or(SyscallError::new(syscall::EINVAL))?
+            .parse()
+            .map_err(|_| SyscallError::new(syscall::EINVAL))?,
+        _ => return Err(SyscallError::new(syscall::EINVAL)),
+    };
+
+    if !via.is_unicast() {
+        return Err(SyscallError::new(syscall::EINVAL));
     }
-    Err(SyscallError::new(syscall::EINVAL))
+
+    let rule = route_table
+        .lookup_rule(&via)
+        .ok_or(SyscallError::new(syscall::EINVAL))?;
+
+    Ok(Rule::new(cidr, Some(via), rule.dev.clone(), rule.src))
 }
 
-fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRef) -> CfgNodeRef {
-    cfg_node!{
+fn mk_root_node(
+    iface: Interface,
+    notifier: NotifierRef,
+    dns_config: DNSConfigRef,
+    route_table: Rc<RefCell<RouteTable>>,
+    devices: Rc<RefCell<DeviceList>>,
+) -> CfgNodeRef {
+    cfg_node! {
         "resolv" => {
             "nameserver" => {
                 rw [dns_config, notifier] (Option<Ipv4Address>, None)
@@ -79,37 +102,24 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
         },
         "route" => {
             "list" => {
-                ro [iface] || {
-                    let mut gateway = None;
-                    iface.borrow_mut().routes_mut().update(|map| {
-                        gateway = map.get(&gateway_cidr()).map(|route| route.via_router);
-                    });
-                    if let Some(ip) = gateway {
-                        format!("default via {}\n", ip)
-                    } else {
-                        String::new()
-                    }
+                ro [route_table] || {
+                    format!("{}", route_table.borrow())
                 }
             },
             "add" => {
-                wo [iface, notifier] (Option<Ipv4Address>, None)
+                wo [iface, notifier, route_table] (Option<Rule>, None)
                 |cur_value, line| {
                     if cur_value.is_none() {
-                        let default_gw = parse_default_gw(line)?;
-                        if !default_gw.is_unicast() {
-                            return Err(SyscallError::new(syscall::EINVAL));
-                        }
-                        *cur_value = Some(default_gw);
+                        let route = parse_route(line, &route_table.borrow())?;
+                        *cur_value = Some(route);
                         Ok(())
                     } else {
                         Err(SyscallError::new(syscall::EINVAL))
                     }
                 }
                 |cur_value| {
-                    if let Some(default_gw) = *cur_value {
-                        if iface.borrow_mut().routes_mut().add_default_ipv4_route(default_gw).is_err() {
-                            return Err(SyscallError::new(syscall::EINVAL));
-                        }
+                    if let Some(route) = cur_value.take() {
+                        route_table.borrow_mut().insert_rule(route);
                         notifier.borrow_mut().schedule_notify("route/list");
                         Ok(())
                     } else {
@@ -118,32 +128,23 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                 }
             },
             "rm" => {
-                wo [iface, notifier] (Option<Ipv4Address>, None)
+                wo [iface, notifier, route_table] (Option<IpCidr>, None)
                 |cur_value, line| {
                     if cur_value.is_none() {
-                        let default_gw = parse_default_gw(line)?;
-                        if !default_gw.is_unicast() {
-                            return Err(SyscallError::new(syscall::EINVAL));
+                        match line.parse() {
+                            Ok(cidr) => {
+                                *cur_value = Some(cidr);
+                                Ok(())
+                            }
+                            Err(_) => Err(SyscallError::new(syscall::EINVAL))
                         }
-                        *cur_value = Some(default_gw);
-                        Ok(())
                     } else {
                         Err(SyscallError::new(syscall::EINVAL))
                     }
                 }
                 |cur_value| {
-                    if let Some(default_gw) = *cur_value {
-                        let mut iface = iface.borrow_mut();
-                        let mut gateway = None;
-                        iface.routes_mut().update(|map| {
-                            gateway = map.get(&gateway_cidr()).map(|route| route.via_router);
-                        });
-                        if gateway != Some(IpAddress::Ipv4(default_gw)) {
-                            return Err(SyscallError::new(syscall::EINVAL));
-                        }
-                        iface.routes_mut().update(|map| {
-                            map.remove(&gateway_cidr());
-                        });
+                    if let Some(cidr) = *cur_value {
+                        route_table.borrow_mut().remove_rule(cidr);
                         notifier.borrow_mut().schedule_notify("route/list");
                         Ok(())
                     } else {
@@ -155,9 +156,17 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
         "ifaces" => {
             "eth0" => {
                 "mac" => {
-                    rw [iface, notifier] (Option<EthernetAddress>, None)
+                    rw [iface, notifier, devices] (Option<EthernetAddress>, None)
                     || {
-                        format!("{}\n", iface.borrow().ethernet_addr())
+                        match devices.borrow().get("eth0") {
+                            Some(dev) => {
+                                match dev.mac_address() {
+                                    Some(addr) => format!("{addr}\n"),
+                                    None => "Not configured\n".into(),
+                                }
+                            }
+                            None => "Device not found\n".into(),
+                        }
                     }
                     |cur_value, line| {
                         if cur_value.is_none() {
@@ -174,96 +183,76 @@ fn mk_root_node(iface: Interface, notifier: NotifierRef, dns_config: DNSConfigRe
                     }
                     |cur_value| {
                         if let Some(mac) = *cur_value {
-                            iface.borrow_mut().set_ethernet_addr(mac);
-                            notifier.borrow_mut().schedule_notify("ifaces/eth0/mac");
+                            if let Some(dev) = devices.borrow_mut().get_mut("eth0") {
+                                dev.set_mac_address(mac);
+                                notifier.borrow_mut().schedule_notify("ifaces/eth0/mac");
+                            }
                         }
                         Ok(())
                     }
                 },
                 "addr" => {
                     "list" => {
-                        ro [iface]
+                        ro [devices]
                         || {
-                            let mut ips = String::new();
-                            for cidr in iface.borrow().ip_addrs() {
-                                ips += &format!("{}\n", cidr);
-                            }
-                            ips
+                            let res = match devices.borrow().get("eth0") {
+                                Some(dev) => {
+                                    match dev.ip_address() {
+                                        Some(addr) => format!("{addr}\n"),
+                                        None => "Not configured\n".into(),
+                                    }
+                                }
+                                None => "Device not found\n".into(),
+                            };
+                            res
                         }
                     },
                     "set" => {
-                        wo [iface, notifier] (Vec<IpCidr>, Vec::new())
+                        wo [iface, notifier, devices, route_table] (Option<IpCidr>, None)
                         |cur_value, line| {
-                            let cidr = IpCidr::from_str(line)
-                                .map_err(|_| SyscallError::new(syscall::EINVAL))?;
-                            if !cidr.address().is_unicast() {
-                                return Err(SyscallError::new(syscall::EINVAL));
-                            }
-                            cur_value.push(cidr);
-                            Ok(())
-                        }
-                        |cur_value| {
-                            if !cur_value.is_empty() {
-                                let mut iface = iface.borrow_mut();
-                                let mut cidrs = vec![];
-                                mem::swap(cur_value, &mut cidrs);
-                                iface.update_ip_addrs(|s| {
-                                    *s = From::from(cidrs);
-                                });
-                                notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
-                            }
-                            Ok(())
-                        }
-                    },
-                    "add" => {
-                        wo [iface, notifier] (Vec<IpCidr>, Vec::new())
-                        |cur_value, line| {
-                            let cidr = IpCidr::from_str(line)
-                                .map_err(|_| SyscallError::new(syscall::EINVAL))?;
-                            if !cidr.address().is_unicast() {
-                                return Err(SyscallError::new(syscall::EINVAL));
-                            }
-                            cur_value.push(cidr);
-                            Ok(())
-                        }
-                        |cur_value| {
-                            let mut iface = iface.borrow_mut();
-                            let mut cidrs = iface.ip_addrs().to_vec();
-                            for cidr in cur_value {
-                                cidrs.insert(0, *cidr);
-                            }
-                            iface.update_ip_addrs(|s| {
-                                *s = From::from(cidrs);
-                            });
-                            notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
-                            Ok(())
-                        }
-                    },
-                    "rm" => {
-                        wo [iface, notifier] (Vec<IpCidr>, Vec::new())
-                        |cur_value, line| {
-                            let cidr = IpCidr::from_str(line)
-                                .map_err(|_| SyscallError::new(syscall::EINVAL))?;
-                            if !cidr.address().is_unicast() {
-                                return Err(SyscallError::new(syscall::EINVAL));
-                            }
-                            cur_value.push(cidr);
-                            Ok(())
-                        }
-                        |cur_value| {
-                            let mut iface = iface.borrow_mut();
-                            let mut cidrs = iface.ip_addrs().to_vec();
-                            for cidr in cur_value {
-                                let pre_retain_len = cidrs.len();
-                                cidrs.retain(|&c| c != *cidr);
-                                if pre_retain_len == cidrs.len() {
+                            if cur_value.is_none() {
+                                let cidr = IpCidr::from_str(line)
+                                    .map_err(|_| SyscallError::new(syscall::EINVAL))?;
+                                if !cidr.address().is_unicast() {
                                     return Err(SyscallError::new(syscall::EINVAL));
                                 }
+                                *cur_value = Some(cidr);
+                                Ok(())
+                            } else {
+                                Err(SyscallError::new(syscall::EINVAL))
                             }
-                            iface.update_ip_addrs(|s| {
-                                *s = From::from(cidrs);
-                            });
-                            notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
+                        }
+                        |cur_value| {
+                            // TODO: Multiple IPs
+                            if let Some(cidr) = cur_value.take() {
+                                if let Some(dev) = devices.borrow_mut().get_mut("eth0") {
+
+                                    let mut route_table = route_table.borrow_mut();
+                                    if let Some(old_addr) = dev.ip_address() {
+                                        let IpCidr::Ipv4(old_v4_cidr) = old_addr;
+                                        let old_network = IpCidr::Ipv4(old_v4_cidr.network());
+
+                                        route_table.remove_rule(old_network);
+                                        route_table.change_src(old_addr.address(), cidr.address());
+                                        iface.borrow_mut().update_ip_addrs(|addrs| addrs.retain(|addr| *addr != old_addr))
+                                    }
+
+                                    dev.set_ip_address(cidr);
+                                    // FIXME: Here, the insert 0 is a workaround to let UDP sockets
+                                    // work with this interface only.
+                                    // Smoltcp takes the first ip address when looking for a source 
+                                    // ip address when sending UDP packets.
+                                    // This behavior will have to be fixed as it's our route table
+                                    // job to find give this source.
+                                    iface.borrow_mut().update_ip_addrs(|addrs| addrs.insert(0, cidr).unwrap());
+
+                                    let IpCidr::Ipv4(v4_cidr) = cidr;
+                                    let network_cidr = IpCidr::Ipv4(v4_cidr.network());
+                                    route_table.insert_rule(Rule::new(network_cidr, None, dev.name().clone(), cidr.address()))
+                                }
+                                notifier.borrow_mut().schedule_notify("ifaces/eth0/addr/list");
+                                notifier.borrow_mut().schedule_notify("route/list");
+                            }
                             Ok(())
                         }
                     },
@@ -345,7 +334,12 @@ pub struct NetCfgScheme {
 }
 
 impl NetCfgScheme {
-    pub fn new(iface: Interface, scheme_file: File) -> NetCfgScheme {
+    pub fn new(
+        iface: Interface,
+        scheme_file: File,
+        route_table: Rc<RefCell<RouteTable>>,
+        devices: Rc<RefCell<DeviceList>>,
+    ) -> NetCfgScheme {
         let notifier = Notifier::new_ref();
         let dns_config = Rc::new(RefCell::new(DNSConfig {
             name_server: Ipv4Address::new(8, 8, 8, 8),
@@ -354,7 +348,13 @@ impl NetCfgScheme {
             scheme_file,
             next_fd: 1,
             files: BTreeMap::new(),
-            root_node: mk_root_node(iface, Rc::clone(&notifier), dns_config),
+            root_node: mk_root_node(
+                iface,
+                Rc::clone(&notifier),
+                dns_config,
+                route_table,
+                devices,
+            ),
             notifier,
         }
     }
@@ -366,12 +366,14 @@ impl NetCfgScheme {
                 Ok(0) => {
                     //TODO: Cleanup must occur
                     break Some(());
-                },
+                }
                 Ok(_) => (),
-                Err(err) => if err.kind() == ErrorKind::WouldBlock {
-                    break None;
-                } else {
-                    return Err(Error::from(err));
+                Err(err) => {
+                    if err.kind() == ErrorKind::WouldBlock {
+                        break None;
+                    } else {
+                        return Err(Error::from(err));
+                    }
                 }
             }
             self.handle(&mut packet);
@@ -414,7 +416,11 @@ impl SchemeMut for NetCfgScheme {
                 is_dir: current_node.is_dir(),
                 is_writable: current_node.is_writable(),
                 is_readable: current_node.is_readable(),
-                node_writer: if current_node.is_writable() { current_node.new_writer() } else { None },
+                node_writer: if current_node.is_writable() {
+                    current_node.new_writer()
+                } else {
+                    None
+                },
                 uid,
                 pos: 0,
                 read_buf,
@@ -440,7 +446,8 @@ impl SchemeMut for NetCfgScheme {
     }
 
     fn write(&mut self, fd: usize, buf: &[u8]) -> SyscallResult<usize> {
-        let file = self.files
+        let file = self
+            .files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
 
@@ -468,7 +475,8 @@ impl SchemeMut for NetCfgScheme {
     }
 
     fn read(&mut self, fd: usize, buf: &mut [u8]) -> SyscallResult<usize> {
-        let file = self.files
+        let file = self
+            .files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
 
@@ -482,15 +490,12 @@ impl SchemeMut for NetCfgScheme {
     }
 
     fn fstat(&mut self, fd: usize, stat: &mut Stat) -> SyscallResult<usize> {
-        let file = self.files
+        let file = self
+            .files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
 
-        stat.st_mode = if file.is_dir {
-            MODE_DIR
-        } else {
-            MODE_FILE
-        };
+        stat.st_mode = if file.is_dir { MODE_DIR } else { MODE_FILE };
         if file.is_writable {
             stat.st_mode |= 0o222;
         }
@@ -505,7 +510,8 @@ impl SchemeMut for NetCfgScheme {
     }
 
     fn fevent(&mut self, fd: usize, events: SyscallEventFlags) -> SyscallResult<SyscallEventFlags> {
-        let file = self.files
+        let file = self
+            .files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
         if events.contains(syscall::EVENT_READ) {
@@ -517,7 +523,8 @@ impl SchemeMut for NetCfgScheme {
     }
 
     fn fsync(&mut self, fd: usize) -> SyscallResult<usize> {
-        let file = self.files
+        let file = self
+            .files
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
 

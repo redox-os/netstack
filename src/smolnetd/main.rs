@@ -3,11 +3,11 @@
 extern crate event;
 #[macro_use]
 extern crate log;
+extern crate byteorder;
 extern crate netutils;
 extern crate redox_netstack;
 extern crate smoltcp;
 extern crate syscall;
-extern crate byteorder;
 
 use std::cell::RefCell;
 use std::fs::File;
@@ -15,14 +15,15 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
 
+use event::EventQueue;
 use redox_netstack::error::{Error, Result};
 use redox_netstack::logger;
-use event::EventQueue;
 use scheme::Smolnetd;
 
 mod buffer_pool;
-mod device;
+mod link;
 mod port_set;
+mod router;
 mod scheme;
 
 fn run(daemon: redox_daemon::Daemon) -> Result<()> {
@@ -143,7 +144,7 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 
     event_queue.trigger_all(event::Event {
         fd: 0,
-        flags: EventFlags::empty()
+        flags: EventFlags::empty(),
     })?;
 
     event_queue.run()
@@ -151,12 +152,13 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 
 fn main() {
     redox_daemon::Daemon::new(move |daemon| {
-        logger::init_logger();
+        logger::init_logger("smolnetd");
 
         if let Err(err) = run(daemon) {
             error!("smoltcpd: {}", err);
             process::exit(1);
         }
         process::exit(0);
-    }).expect("smoltcp: failed to daemonize");
+    })
+    .expect("smoltcp: failed to daemonize");
 }

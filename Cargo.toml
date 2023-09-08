@@ -20,22 +20,25 @@ netutils = { git = "https://gitlab.redox-os.org/redox-os/netutils.git" }
 redox_event = { git = "https://gitlab.redox-os.org/redox-os/event.git" }
 redox-daemon = "0.1.1"
 redox_syscall = "0.3"
+redox-log = "0.1"
 byteorder = { version = "1.0", default-features = false }
 dns-parser = "0.7.1"
 
 [dependencies.log]
-version = "0.3"
+version = "0.4"
 default-features = false
 features = ["release_max_level_warn"]
 
 [dependencies.smoltcp]
-path = "smoltcp"
+version = "0.10.0"
 default-features = false
 features = [
     "std",
-    "ethernet",
+    "medium-ethernet", "medium-ip",
     "proto-ipv4",
-    "socket-raw", "socket-icmp", "socket-udp", "socket-tcp"
+    "socket-raw", "socket-icmp", "socket-udp", "socket-tcp",
+    "iface-max-addr-count-8",
+    "log"
 ]
 #For debugging: "log", "verbose"
 

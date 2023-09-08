@@ -1,19 +1,20 @@
-use smoltcp::socket::{SocketHandle, UdpPacketMetadata, UdpSocket, UdpSocketBuffer};
-use smoltcp::wire::IpEndpoint;
+use smoltcp::socket::udp::{PacketMetadata as UdpPacketMetadata, Socket as UdpSocket, PacketBuffer as UdpSocketBuffer};
+use smoltcp::iface::SocketHandle;
+use smoltcp::wire::{IpEndpoint, IpListenEndpoint};
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 
-use crate::device::NetworkDevice;
 use crate::port_set::PortSet;
-use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
+use crate::router::Router;
+use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme, Context};
 use super::{parse_endpoint, Smolnetd, SocketSet};
 
-pub type UdpScheme = SocketScheme<UdpSocket<'static, 'static>>;
+pub type UdpScheme = SocketScheme<UdpSocket<'static>>;
 
-impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
+impl<'a> SchemeSocket for UdpSocket<'a> {
     type SchemeDataT = PortSet;
-    type DataT = IpEndpoint;
+    type DataT = IpListenEndpoint;
     type SettingT = ();
 
     fn new_scheme_data() -> Self::SchemeDataT {
@@ -61,6 +62,7 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
         path: &str,
         uid: u32,
         port_set: &mut Self::SchemeDataT,
+        _context: &Context
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         let mut parts = path.split('/');
         let remote_endpoint = parse_endpoint(parts.next().unwrap_or(""));
@@ -72,11 +74,11 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
 
         let rx_buffer = UdpSocketBuffer::new(
             vec![UdpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
         );
         let tx_buffer = UdpSocketBuffer::new(
             vec![UdpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-            vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+            vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
         );
         let udp_socket = UdpSocket::new(rx_buffer, tx_buffer);
 
@@ -90,10 +92,11 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
 
         let socket_handle = socket_set.add(udp_socket);
 
-        let mut udp_socket = socket_set.get::<UdpSocket>(socket_handle);
+        let udp_socket = socket_set.get_mut::<UdpSocket>(socket_handle);
         udp_socket
             .bind(local_endpoint)
             .expect("Can't bind udp socket to local endpoint");
+
 
         Ok((socket_handle, remote_endpoint))
     }
@@ -118,7 +121,9 @@ impl<'a, 'b> SchemeSocket for UdpSocket<'a, 'b> {
             return Err(SyscallError::new(syscall::EADDRNOTAVAIL));
         }
         if self.can_send() {
-            self.send_slice(buf, file.data).expect("Can't send slice");
+            let endpoint = file.data;
+            let endpoint = IpEndpoint::new(endpoint.addr.expect("If we can send, this should be specified"), endpoint.port);
+            self.send_slice(buf, endpoint).expect("Can't send slice");
             Ok(Some(buf.len()))
         } else if file.flags & syscall::O_NONBLOCK == syscall::O_NONBLOCK {
             Err(SyscallError::new(syscall::EAGAIN))

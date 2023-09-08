@@ -1,17 +1,18 @@
-use smoltcp::socket::{IcmpEndpoint, IcmpPacketMetadata, IcmpSocket, IcmpSocketBuffer, SocketHandle};
-use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress, IpEndpoint};
+use smoltcp::socket::icmp::{Endpoint as IcmpEndpoint, PacketMetadata as IcmpPacketMetadata, Socket as IcmpSocket, PacketBuffer as IcmpSocketBuffer};
+use smoltcp::iface::SocketHandle;
+use smoltcp::wire::{Icmpv4Packet, Icmpv4Repr, IpAddress, IpListenEndpoint};
 use std::mem;
 use std::str;
 use syscall::{Error as SyscallError, Result as SyscallResult};
 use syscall;
 use byteorder::{ByteOrder, NetworkEndian};
 
-use crate::device::NetworkDevice;
 use crate::port_set::PortSet;
-use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme};
+use crate::router::Router;
+use super::socket::{DupResult, SchemeFile, SchemeSocket, SocketFile, SocketScheme, Context};
 use super::{Smolnetd, SocketSet};
 
-pub type IcmpScheme = SocketScheme<IcmpSocket<'static, 'static>>;
+pub type IcmpScheme = SocketScheme<IcmpSocket<'static>>;
 
 enum IcmpSocketType {
     Echo,
@@ -24,7 +25,7 @@ pub struct IcmpData {
     ident: u16,
 }
 
-impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
+impl<'a> SchemeSocket for IcmpSocket<'a> {
     type SchemeDataT = PortSet;
     type DataT = IcmpData;
     type SettingT = ();
@@ -74,6 +75,7 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
         path: &str,
         _uid: u32,
         ident_set: &mut Self::SchemeDataT,
+        _context: &Context
     ) -> SyscallResult<(SocketHandle, Self::DataT)> {
         use std::str::FromStr;
 
@@ -93,15 +95,15 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 let socket = IcmpSocket::new(
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
                     ),
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
                     )
                 );
                 let handle = socket_set.add(socket);
-                let mut icmp_socket = socket_set.get::<IcmpSocket>(handle);
+                let icmp_socket = socket_set.get_mut::<IcmpSocket>(handle);
                 let ident = ident_set
                     .get_port()
                     .ok_or_else(|| SyscallError::new(syscall::EINVAL))?;
@@ -125,20 +127,20 @@ impl<'a, 'b> SchemeSocket for IcmpSocket<'a, 'b> {
                 let socket = IcmpSocket::new(
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
                     ),
                     IcmpSocketBuffer::new(
                         vec![IcmpPacketMetadata::EMPTY; Smolnetd::SOCKET_BUFFER_SIZE],
-                        vec![0; NetworkDevice::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
+                        vec![0; Router::MTU * Smolnetd::SOCKET_BUFFER_SIZE]
                     )
                 );
                 let handle = socket_set.add(socket);
-                let mut icmp_socket = socket_set.get::<IcmpSocket>(handle);
+                let icmp_socket = socket_set.get_mut::<IcmpSocket>(handle);
                 let ident = ident_set
                     .get_port()
                     .ok_or_else(|| SyscallError::new(syscall::EINVAL))?;
                 icmp_socket
-                    .bind(IcmpEndpoint::Udp(IpEndpoint::from(ident)))
+                    .bind(IcmpEndpoint::Udp(IpListenEndpoint::from(ident)))
                     .map_err(|_| syscall::Error::new(syscall::EINVAL))?;
                 let socket_data = IcmpData {
                     socket_type: IcmpSocketType::Udp,
