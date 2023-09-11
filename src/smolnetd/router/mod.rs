@@ -102,7 +102,6 @@ impl Router {
 
                     let IpAddress::Ipv4(src) = rule.src;
                     if src != packet.src_addr() {
-                        error!("Changed packet source {} -> {}", packet.src_addr(), src);
                         packet.set_src_addr(src);
                         packet.fill_checksum()
                     }
