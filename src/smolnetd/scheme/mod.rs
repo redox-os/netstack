@@ -10,7 +10,7 @@ use smoltcp::iface::{Config, Interface as SmoltcpInterface};
 use smoltcp::phy::Tracer;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address, 
+    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Address,
 };
 use std::cell::RefCell;
 use std::fs::File;
@@ -64,6 +64,7 @@ impl Smolnetd {
 
     pub fn new(
         network_file: File,
+        hardware_addr: EthernetAddress,
         ip_file: File,
         udp_file: File,
         tcp_file: File,
@@ -71,8 +72,6 @@ impl Smolnetd {
         time_file: File,
         netcfg_file: File,
     ) -> Smolnetd {
-        let hardware_addr = EthernetAddress::from_str(getcfg("mac").unwrap().trim())
-            .expect("Can't parse the 'mac' cfg");
         let protocol_addrs = vec![
             IpCidr::new(IpAddress::v4(127, 0, 0, 1), 8),
         ];

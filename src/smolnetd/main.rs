@@ -12,11 +12,14 @@ use std::fs::File;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
+use std::str::FromStr;
 
 use event::EventQueue;
+use netutils::getcfg;
 use redox_netstack::error::{Error, Result};
 use redox_netstack::logger;
 use scheme::Smolnetd;
+use smoltcp::wire::EthernetAddress;
 
 mod buffer_pool;
 mod link;
@@ -31,6 +34,13 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
     let network_fd = syscall::open("network:", O_RDWR | O_NONBLOCK)
         .map_err(|e| Error::from_syscall_error(e, "failed to open network:"))?
         as RawFd;
+
+    let hardware_addr = std::fs::read("network:mac")
+        .map(|mac_address| EthernetAddress::from_bytes(&mac_address))
+        .unwrap_or_else(|_| {
+            EthernetAddress::from_str(getcfg("mac").unwrap().trim())
+                .expect("Can't parse the 'mac' cfg")
+        });
 
     trace!("opening :ip");
     let ip_fd = syscall::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK)
@@ -75,6 +85,7 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 
     let smolnetd = Rc::new(RefCell::new(Smolnetd::new(
         network_file,
+        hardware_addr,
         ip_file,
         udp_file,
         tcp_file,
