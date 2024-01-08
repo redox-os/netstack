@@ -47,7 +47,9 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 
     let dnsd = Rc::new(RefCell::new(Dnsd::new(dns_file, time_file, event_queue.file.as_raw_fd())));
 
-    syscall::setrens(0, 0).expect("dnsd: failed to enter null namespace");
+    let new_ns = syscall::mkns(&[["udp".as_ptr() as usize, "udp".len()]])
+        .expect("dnsd: failed to create namespace");
+    syscall::setrens(new_ns, new_ns).expect("dnsd: failed to enter namespace");
 
     daemon.ready().expect("dnsd: failed to notify parent");
 
