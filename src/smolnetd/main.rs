@@ -12,10 +12,8 @@ use std::fs::File;
 use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
-use std::str::FromStr;
 
 use event::EventQueue;
-use netutils::getcfg;
 use redox_netstack::error::{Error, Result};
 use redox_netstack::logger;
 use scheme::Smolnetd;
@@ -37,10 +35,7 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
 
     let hardware_addr = std::fs::read("network:mac")
         .map(|mac_address| EthernetAddress::from_bytes(&mac_address))
-        .unwrap_or_else(|_| {
-            EthernetAddress::from_str(getcfg("mac").unwrap().trim())
-                .expect("Can't parse the 'mac' cfg")
-        });
+        .expect("failed to get mac address from network adapter");
 
     trace!("opening :ip");
     let ip_fd = syscall::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK)
