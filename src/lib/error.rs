@@ -7,6 +7,7 @@ use syscall::error::Error as SyscallError;
 enum ErrorType {
     Syscall(SyscallError),
     IOError(IOError),
+    Other,
 }
 
 pub struct Error {
@@ -28,6 +29,13 @@ impl Error {
             descr: descr.into(),
         }
     }
+
+    pub fn other_error<S: Into<String>>(descr: S) -> Error {
+        Error {
+            error_type: ErrorType::Other,
+            descr: descr.into()
+        }
+    }
 }
 
 impl fmt::Display for Error {
@@ -38,6 +46,9 @@ impl fmt::Display for Error {
             }
             ErrorType::IOError(ref io_error) => {
                 write!(f, "{} : io error : {}", self.descr, io_error)
+            }
+            ErrorType::Other => {
+                write!(f, "{}", self.descr)
             }
         }
     }

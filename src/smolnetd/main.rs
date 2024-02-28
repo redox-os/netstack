@@ -18,6 +18,7 @@ use redox_netstack::error::{Error, Result};
 use redox_netstack::logger;
 use scheme::Smolnetd;
 use smoltcp::wire::EthernetAddress;
+use syscall::flag::*;
 
 mod buffer_pool;
 mod link;
@@ -25,15 +26,47 @@ mod port_set;
 mod router;
 mod scheme;
 
-fn run(daemon: redox_daemon::Daemon) -> Result<()> {
-    use syscall::flag::*;
+fn get_network_adapter() -> Result<String> {
+    use std::fs;
 
-    trace!("opening network:");
-    let network_fd = syscall::open("network:", O_RDWR | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open network:"))?
+    let mut adapters = vec![];
+
+    for entry_res in fs::read_dir("/scheme")? {
+        let Ok(entry) = entry_res else {
+            continue;
+        };
+
+        let Ok(scheme) = entry.file_name().into_string() else {
+            continue;
+        };
+
+        if !scheme.starts_with("network") {
+            continue;
+        }
+
+        adapters.push(scheme);
+    }
+
+    if adapters.is_empty() {
+        Err(Error::other_error("no network adapter found"))
+    } else {
+        let adapter = adapters.remove(0);
+        if !adapters.is_empty() {
+            // FIXME allow using multiple network adapters at the same time
+            warn!("Multiple network adapters found. Only {adapter} will be used");
+        }
+        Ok(adapter)
+    }
+}
+
+fn run(daemon: redox_daemon::Daemon) -> Result<()> {
+    let adapter = get_network_adapter()?;
+    trace!("opening {adapter}:");
+    let network_fd = syscall::open(format!("{adapter}:"), O_RDWR | O_NONBLOCK)
+        .map_err(|e| Error::from_syscall_error(e, format!("failed to open {adapter}:")))?
         as RawFd;
 
-    let hardware_addr = std::fs::read("network:mac")
+    let hardware_addr = std::fs::read(format!("{adapter}:mac"))
         .map(|mac_address| EthernetAddress::from_bytes(&mac_address))
         .expect("failed to get mac address from network adapter");
 
