@@ -13,12 +13,14 @@ use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
 use std::rc::Rc;
 
-use event::EventQueue;
-use redox_netstack::error::{Error, Result};
+use event::{EventQueue, EventFlags};
+use libredox::Fd;
+use libredox::flag::{O_RDWR, O_NONBLOCK, O_CREAT};
+use anyhow::{Result, anyhow, bail, Context};
+
 use redox_netstack::logger;
 use scheme::Smolnetd;
 use smoltcp::wire::EthernetAddress;
-use syscall::flag::*;
 
 mod buffer_pool;
 mod link;
@@ -48,7 +50,7 @@ fn get_network_adapter() -> Result<String> {
     }
 
     if adapters.is_empty() {
-        Err(Error::other_error("no network adapter found"))
+        bail!("no network adapter found");
     } else {
         let adapter = adapters.remove(0);
         if !adapters.is_empty() {
@@ -62,129 +64,106 @@ fn get_network_adapter() -> Result<String> {
 fn run(daemon: redox_daemon::Daemon) -> Result<()> {
     let adapter = get_network_adapter()?;
     trace!("opening {adapter}:");
-    let network_fd = syscall::open(format!("{adapter}:"), O_RDWR | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, format!("failed to open {adapter}:")))?
-        as RawFd;
+    let network_fd = Fd::open(&format!("{adapter}:"), O_RDWR | O_NONBLOCK, 0)
+        .map_err(|e| anyhow!("failed to open {adapter}: {e}"))?;
 
     let hardware_addr = std::fs::read(format!("{adapter}:mac"))
         .map(|mac_address| EthernetAddress::from_bytes(&mac_address))
-        .expect("failed to get mac address from network adapter");
+        .context("failed to get mac address from network adapter")?;
 
     trace!("opening :ip");
-    let ip_fd = syscall::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open :ip"))? as RawFd;
+    let ip_fd = Fd::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+        .context("failed to open :ip")?;
 
     trace!("opening :udp");
-    let udp_fd = syscall::open(":udp", O_RDWR | O_CREAT | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open :udp"))?
-        as RawFd;
+    let udp_fd = Fd::open(":udp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+        .context("failed to open :udp")?;
 
     trace!("opening :tcp");
-    let tcp_fd = syscall::open(":tcp", O_RDWR | O_CREAT | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open :tcp"))?
-        as RawFd;
+    let tcp_fd = Fd::open(":tcp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+        .context("failed to open :tcp")?;
 
     trace!("opening :icmp");
-    let icmp_fd = syscall::open(":icmp", O_RDWR | O_CREAT | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open :icmp"))?
-        as RawFd;
+    let icmp_fd = Fd::open(":icmp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+        .context("failed to open :icmp")?;
 
     trace!("opening :netcfg");
-    let netcfg_fd = syscall::open(":netcfg", O_RDWR | O_CREAT | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open :netcfg"))?
-        as RawFd;
+    let netcfg_fd = Fd::open(":netcfg", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+        .context("failed to open :netcfg")?;
 
     let time_path = format!("time:{}", syscall::CLOCK_MONOTONIC);
-    let time_fd = syscall::open(&time_path, syscall::O_RDWR)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open time:"))?
-        as RawFd;
+    let time_fd = Fd::open(&time_path, O_RDWR, 0)
+        .context("failed to open time:")?;
 
-    let (network_file, ip_file, time_file, udp_file, tcp_file, icmp_file, netcfg_file) = unsafe {
-        (
-            File::from_raw_fd(network_fd),
-            File::from_raw_fd(ip_fd),
-            File::from_raw_fd(time_fd),
-            File::from_raw_fd(udp_fd),
-            File::from_raw_fd(tcp_fd),
-            File::from_raw_fd(icmp_fd),
-            File::from_raw_fd(netcfg_fd),
-        )
-    };
+    event::user_data! {
+        enum EventSource {
+            Network,
+            Time,
+            IpScheme,
+            UdpScheme,
+            TcpScheme,
+            IcmpScheme,
+            NetcfgScheme,
+        }
+    }
 
-    let smolnetd = Rc::new(RefCell::new(Smolnetd::new(
-        network_file,
-        hardware_addr,
-        ip_file,
-        udp_file,
-        tcp_file,
-        icmp_file,
-        time_file,
-        netcfg_file,
-    )));
-
-    let mut event_queue = EventQueue::<(), Error>::new()
-        .map_err(|e| Error::from_io_error(e, "failed to create event queue"))?;
-
-    syscall::setrens(0, 0).expect("smolnetd: failed to enter null namespace");
+    let event_queue = EventQueue::<EventSource>::new()
+        .context("failed to create event queue")?;
 
     daemon.ready().expect("smolnetd: failed to notify parent");
 
-    let smolnetd_ = Rc::clone(&smolnetd);
+    event_queue.subscribe(network_fd.raw(), EventSource::Network, EventFlags::READ)
+        .context("failed to listen to network events")?;
 
-    event_queue
-        .add(network_fd, move |_| {
-            smolnetd_.borrow_mut().on_network_scheme_event()
-        })
-        .map_err(|e| Error::from_io_error(e, "failed to listen to network events"))?;
+    event_queue.subscribe(time_fd.raw(), EventSource::Time, EventFlags::READ)
+        .context("failed to listen to timer events")?;
 
-    let smolnetd_ = Rc::clone(&smolnetd);
+    event_queue.subscribe(ip_fd.raw(), EventSource::IpScheme, EventFlags::READ)
+        .context("failed to listen to ip scheme events")?;
 
-    event_queue
-        .add(ip_fd, move |_| smolnetd_.borrow_mut().on_ip_scheme_event())
-        .map_err(|e| Error::from_io_error(e, "failed to listen to ip events"))?;
+    event_queue.subscribe(udp_fd.raw(), EventSource::UdpScheme, EventFlags::READ)
+        .context("failed to listen to udp scheme events")?;
 
-    let smolnetd_ = Rc::clone(&smolnetd);
+    event_queue.subscribe(tcp_fd.raw(), EventSource::TcpScheme, EventFlags::READ)
+        .context("failed to listen to tcp scheme events")?;
 
-    event_queue
-        .add(udp_fd, move |_| {
-            smolnetd_.borrow_mut().on_udp_scheme_event()
-        })
-        .map_err(|e| Error::from_io_error(e, "failed to listen to udp events"))?;
+    event_queue.subscribe(icmp_fd.raw(), EventSource::IcmpScheme, EventFlags::READ)
+        .context("failed to listen to icmp scheme events")?;
 
-    let smolnetd_ = Rc::clone(&smolnetd);
+    event_queue.subscribe(netcfg_fd.raw(), EventSource::NetcfgScheme, EventFlags::READ)
+        .context("failed to listen to netcfg scheme events")?;
 
-    event_queue
-        .add(tcp_fd, move |_| {
-            smolnetd_.borrow_mut().on_tcp_scheme_event()
-        })
-        .map_err(|e| Error::from_io_error(e, "failed to listen to tcp events"))?;
+    let mut smolnetd = Smolnetd::new(
+        network_fd,
+        hardware_addr,
+        ip_fd,
+        udp_fd,
+        tcp_fd,
+        icmp_fd,
+        time_fd,
+        netcfg_fd,
+    );
 
-    let smolnetd_ = Rc::clone(&smolnetd);
+    libredox::call::setrens(0, 0)
+        .context("smolnetd: failed to enter null namespace")?;
 
-    event_queue
-        .add(icmp_fd, move |_| {
-            smolnetd_.borrow_mut().on_icmp_scheme_event()
-        })
-        .map_err(|e| Error::from_io_error(e, "failed to listen to icmp events"))?;
+    let all = {
+        use EventSource::*;
+        [Network, Time, IpScheme, UdpScheme, IcmpScheme, NetcfgScheme].map(Ok)
+    };
 
-    let smolnetd_ = Rc::clone(&smolnetd);
-
-    event_queue
-        .add(time_fd, move |_| smolnetd_.borrow_mut().on_time_event())
-        .map_err(|e| Error::from_io_error(e, "failed to listen to time events"))?;
-
-    event_queue
-        .add(netcfg_fd, move |_| {
-            smolnetd.borrow_mut().on_netcfg_scheme_event()
-        })
-        .map_err(|e| Error::from_io_error(e, "failed to listen to netcfg events"))?;
-
-    event_queue.trigger_all(event::Event {
-        fd: 0,
-        flags: EventFlags::empty(),
-    })?;
-
-    event_queue.run()
+    for event_res in all.into_iter().chain(event_queue.map(|r| r.map(|e| e.user_data))) {
+        match event_res? {
+            EventSource::Network => smolnetd.on_network_scheme_event()?,
+            EventSource::Time => smolnetd.on_time_event()?,
+            EventSource::IpScheme => smolnetd.on_ip_scheme_event()?,
+            EventSource::UdpScheme => smolnetd.on_udp_scheme_event()?,
+            EventSource::TcpScheme => smolnetd.on_tcp_scheme_event()?,
+            EventSource::IcmpScheme => smolnetd.on_icmp_scheme_event()?,
+            EventSource::NetcfgScheme => smolnetd.on_netcfg_scheme_event()?,
+        }
+    }
+    Ok(())
 }
 
 fn main() {

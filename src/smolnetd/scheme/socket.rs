@@ -10,7 +10,8 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 use std::str;
 
-use syscall;
+use libredox::flag::CLOCK_MONOTONIC;
+use syscall::{self, KSMSG_CANCEL};
 use syscall::data::TimeSpec;
 use syscall::flag::{EVENT_READ, EVENT_WRITE};
 use syscall::{
@@ -286,6 +287,10 @@ where
                     }
                 }
             }
+            if packet.a == KSMSG_CANCEL {
+                println!("smolnetd: todo: handle cancellation");
+                continue;
+            }
             if let Some(a) = self.handle(&mut packet) {
                 packet.a = a;
                 self.scheme_file.write_all(&packet)?;
@@ -372,15 +377,14 @@ where
         }?;
 
         let mut timeout = match packet.a {
-            syscall::SYS_WRITE => Ok(write_timeout),
-            syscall::SYS_READ => Ok(read_timeout),
-            _ => Ok(None),
-        }?;
+            syscall::SYS_WRITE => write_timeout,
+            syscall::SYS_READ => read_timeout,
+            _ => None,
+        };
 
         if let Some(ref mut timeout) = timeout {
-            let mut cur_time = TimeSpec::default();
-            syscall::clock_gettime(syscall::CLOCK_MONOTONIC, &mut cur_time)?;
-            *timeout = add_time(timeout, &cur_time)
+            let cur_time = libredox::call::clock_gettime(CLOCK_MONOTONIC)?;
+            *timeout = add_time(timeout, &TimeSpec { tv_sec: cur_time.tv_sec, tv_nsec: cur_time.tv_nsec as i32 })
         }
 
         Ok(timeout)

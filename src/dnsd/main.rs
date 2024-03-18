@@ -1,84 +1,74 @@
-extern crate dns_parser;
-extern crate event;
 #[macro_use]
 extern crate log;
-extern crate redox_netstack;
-extern crate syscall;
 
+use anyhow::{Error, Result, Context};
 use event::EventQueue;
-use redox_netstack::error::{Error, Result};
+use ioslice::IoSlice;
+use libredox::Fd;
 use redox_netstack::logger;
 use scheme::Dnsd;
-use std::cell::RefCell;
 use std::fs::File;
-use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::io::{FromRawFd, RawFd};
 use std::process;
-use std::rc::Rc;
 
 mod scheme;
 
 fn run(daemon: redox_daemon::Daemon) -> Result<()> {
-    use syscall::flag::*;
+    use libredox::flag::*;
 
-    let dns_fd = syscall::open(":dns", O_RDWR | O_CREAT | O_NONBLOCK)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open :dns"))?
-        as RawFd;
+    let dns_fd = Fd::open(":dns", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+        .context("failed to open :dns")?;
 
-    let time_path = format!("time:{}", syscall::CLOCK_MONOTONIC);
-    let time_fd = syscall::open(&time_path, syscall::O_RDWR)
-        .map_err(|e| Error::from_syscall_error(e, "failed to open time:"))?
-        as RawFd;
+    let time_path = format!("time:{}", CLOCK_MONOTONIC);
+    let time_fd = Fd::open(&time_path, O_RDWR, 0)
+        .context("failed to open time")?;
 
-    let nameserver_fd = syscall::open(
+    let nameserver_fd = Fd::open(
         "netcfg:resolv/nameserver",
-        syscall::O_RDWR | syscall::O_CREAT | syscall::O_NONBLOCK,
-    ).map_err(|e| Error::from_syscall_error(e, "failed to open nameserver:"))?
-        as RawFd;
+        O_RDWR | O_CREAT | O_NONBLOCK,
+        0,
+    ).context("failed to open nameserver")?;
+
+    let event_queue = EventQueue::<EventSource>::new()
+        .context("failed to create event queue")?;
+
+    event_queue
+        .subscribe(dns_fd.raw(), EventSource::DnsScheme, event::EventFlags::READ)
+        .context("failed to listen to time events")?;
+    event_queue
+        .subscribe(nameserver_fd.raw(), EventSource::NameserverScheme, event::EventFlags::READ)
+        .context("failed to listen to nameserver socket events")?;
+    event_queue
+        .subscribe(time_fd.raw(), EventSource::Timer, event::EventFlags::READ)
+        .context("failed to listen to timer events")?;
 
     let (dns_file, time_file) = unsafe {
         (
-            File::from_raw_fd(dns_fd),
-            File::from_raw_fd(time_fd),
+            File::from_raw_fd(dns_fd.into_raw() as RawFd),
+            File::from_raw_fd(time_fd.into_raw() as RawFd),
         )
     };
 
-    let mut event_queue = EventQueue::<(), Error>::new()
-        .map_err(|e| Error::from_io_error(e, "failed to create event queue"))?;
+    let mut dnsd = Dnsd::new(dns_file, time_file, &event_queue);
 
-    let dnsd = Rc::new(RefCell::new(Dnsd::new(dns_file, time_file, event_queue.file.as_raw_fd())));
-
-    let new_ns = syscall::mkns(&[["udp".as_ptr() as usize, "udp".len()]])
+    let new_ns = libredox::call::mkns(&[IoSlice::new(b"dns")])
         .expect("dnsd: failed to create namespace");
-    syscall::setrens(new_ns, new_ns).expect("dnsd: failed to enter namespace");
+    libredox::call::setrens(new_ns, new_ns).expect("dnsd: failed to enter namespace");
 
     daemon.ready().expect("dnsd: failed to notify parent");
 
-    let dnsd_ = Rc::clone(&dnsd);
-
-    event_queue
-        .add(dns_fd, move |_| dnsd_.borrow_mut().on_dns_file_event())
-        .map_err(|e| Error::from_io_error(e, "failed to listen to time events"))?;
-
-    let dnsd_ = Rc::clone(&dnsd);
-
-    event_queue
-        .add(nameserver_fd, move |_| dnsd_.borrow_mut().on_nameserver_event())
-        .map_err(|e| Error::from_io_error(e, "failed to listen to nameserver"))?;
-
-    let dnsd_ = Rc::clone(&dnsd);
-
-    event_queue.set_default_callback(move |event| dnsd_.borrow_mut().on_unknown_fd_event(event.fd));
-
-    event_queue
-        .add(time_fd, move |_| dnsd.borrow_mut().on_time_event())
-        .map_err(|e| Error::from_io_error(e, "failed to listen to time events"))?;
-
-    event_queue.trigger_all(event::Event {
-        fd: 0,
-        flags: EventFlags::empty(),
-    })?;
-
-    event_queue.run()
+    for event_res in event_queue.iter() {
+        let event = event_res.context("failed to read from event queue")?;
+        match event.user_data {
+            EventSource::DnsScheme => if !dnsd.on_dns_file_event()? {
+                break
+            },
+            EventSource::NameserverScheme => dnsd.on_nameserver_event()?,
+            EventSource::Timer => dnsd.on_time_event()?,
+            EventSource::Other => dnsd.on_unknown_fd_event(event.fd as RawFd)?,
+        }
+    }
+    Ok(())
 }
 
 fn main() {
@@ -90,4 +80,13 @@ fn main() {
         }
         process::exit(0);
     }).expect("dnsd: failed to daemonize");
+}
+
+event::user_data! {
+    enum EventSource {
+        DnsScheme,
+        NameserverScheme,
+        Timer,
+        Other,
+    }
 }

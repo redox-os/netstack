@@ -4,12 +4,14 @@ use std::result;
 use std::io::Error as IOError;
 use syscall::error::Error as SyscallError;
 
+#[derive(Debug)]
 enum ErrorType {
     Syscall(SyscallError),
     IOError(IOError),
     Other,
 }
 
+#[derive(Debug)]
 pub struct Error {
     error_type: ErrorType,
     descr: String,
@@ -53,6 +55,7 @@ impl fmt::Display for Error {
         }
     }
 }
+impl std::error::Error for Error {}
 
 impl convert::From<IOError> for Error {
     fn from(e: IOError) -> Self {
