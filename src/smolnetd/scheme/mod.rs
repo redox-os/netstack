@@ -4,6 +4,7 @@ use crate::link::{loopback::LoopbackDevice, DeviceList};
 use crate::router::route_table::{RouteTable, Rule};
 use crate::router::Router;
 use crate::scheme::smoltcp::iface::SocketSet as SmoltcpSocketSet;
+use libredox::Fd;
 use netutils::getcfg;
 use smoltcp;
 use smoltcp::iface::{Config, Interface as SmoltcpInterface};
@@ -16,6 +17,7 @@ use std::cell::RefCell;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::mem::size_of;
+use std::os::fd::{FromRawFd, RawFd};
 use std::rc::Rc;
 use std::str::FromStr;
 use syscall;
@@ -63,14 +65,14 @@ impl Smolnetd {
     pub const MAX_CHECK_TIMEOUT: Duration = Duration::from_millis(500);
 
     pub fn new(
-        network_file: File,
+        network_file: Fd,
         hardware_addr: EthernetAddress,
-        ip_file: File,
-        udp_file: File,
-        tcp_file: File,
-        icmp_file: File,
-        time_file: File,
-        netcfg_file: File,
+        ip_file: Fd,
+        udp_file: Fd,
+        tcp_file: Fd,
+        icmp_file: Fd,
+        time_file: Fd,
+        netcfg_file: Fd,
     ) -> Smolnetd {
         let protocol_addrs = vec![
             IpCidr::new(IpAddress::v4(127, 0, 0, 1), 8),
@@ -108,7 +110,7 @@ impl Smolnetd {
 
         let mut eth0 = EthernetLink::new(
             "eth0",
-            network_file,
+            unsafe { File::from_raw_fd(network_file.into_raw() as RawFd) },
         );
         eth0.set_mac_address(hardware_addr);
 
@@ -120,79 +122,79 @@ impl Smolnetd {
             router_device: network_device,
             socket_set: Rc::clone(&socket_set),
             timer: ::std::time::Instant::now(),
-            time_file,
+            time_file: unsafe { File::from_raw_fd(time_file.into_raw() as RawFd) },
             ip_scheme: IpScheme::new(
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
-                ip_file,
+                unsafe { File::from_raw_fd(ip_file.into_raw() as RawFd) },
             ),
             udp_scheme: UdpScheme::new(
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
-                udp_file,
+                unsafe { File::from_raw_fd(udp_file.into_raw() as RawFd) },
             ),
             tcp_scheme: TcpScheme::new(
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
-                tcp_file,
+                unsafe { File::from_raw_fd(tcp_file.into_raw() as RawFd) },
             ),
             icmp_scheme: IcmpScheme::new(
                 Rc::clone(&iface),
                 Rc::clone(&route_table),
                 Rc::clone(&socket_set),
-                icmp_file,
+                unsafe { File::from_raw_fd(icmp_file.into_raw() as RawFd) },
             ),
             netcfg_scheme: NetCfgScheme::new(
                 Rc::clone(&iface),
-                netcfg_file,
+                unsafe { File::from_raw_fd(netcfg_file.into_raw() as RawFd) },
                 Rc::clone(&route_table),
                 Rc::clone(&devices),
             ),
         }
     }
 
-    pub fn on_network_scheme_event(&mut self) -> Result<Option<()>> {
+    pub fn on_network_scheme_event(&mut self) -> Result<()> {
         self.poll()?;
-        Ok(None)
+        Ok(())
     }
 
-    pub fn on_ip_scheme_event(&mut self) -> Result<Option<()>> {
+    pub fn on_ip_scheme_event(&mut self) -> Result<()> {
         self.ip_scheme.on_scheme_event()?;
         let _ = self.poll()?;
-        Ok(None)
+        Ok(())
     }
 
-    pub fn on_udp_scheme_event(&mut self) -> Result<Option<()>> {
+    pub fn on_udp_scheme_event(&mut self) -> Result<()> {
         self.udp_scheme.on_scheme_event()?;
         let _ = self.poll()?;
-        Ok(None)
+        Ok(())
     }
 
-    pub fn on_tcp_scheme_event(&mut self) -> Result<Option<()>> {
+    pub fn on_tcp_scheme_event(&mut self) -> Result<()> {
         self.tcp_scheme.on_scheme_event()?;
         let _ = self.poll()?;
-        Ok(None)
+        Ok(())
     }
 
-    pub fn on_icmp_scheme_event(&mut self) -> Result<Option<()>> {
+    pub fn on_icmp_scheme_event(&mut self) -> Result<()> {
         self.icmp_scheme.on_scheme_event()?;
         let _ = self.poll()?;
-        Ok(None)
+        Ok(())
     }
 
-    pub fn on_time_event(&mut self) -> Result<Option<()>> {
+    pub fn on_time_event(&mut self) -> Result<()> {
         let timeout = self.poll()?;
         self.schedule_time_event(timeout)?;
         //TODO: Fix network scheme to ensure events are not missed
         self.on_network_scheme_event()
     }
 
-    pub fn on_netcfg_scheme_event(&mut self) -> Result<Option<()>> {
+    pub fn on_netcfg_scheme_event(&mut self) -> Result<()> {
         self.netcfg_scheme.on_scheme_event()?;
-        Ok(None)
+        Ok(())
     }
 
     fn schedule_time_event(&mut self, timeout: Duration) -> Result<()> {
