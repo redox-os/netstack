@@ -10,7 +10,7 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 use std::str;
 
-use libredox::flag::CLOCK_MONOTONIC;
+use libredox::flag::{self, CLOCK_MONOTONIC};
 use syscall::{self, KSMSG_CANCEL};
 use syscall::data::TimeSpec;
 use syscall::flag::{EVENT_READ, EVENT_WRITE};
@@ -317,9 +317,8 @@ where
     }
 
     pub fn notify_sockets(&mut self) -> Result<()> {
-        let mut cur_time = TimeSpec::default();
-        syscall::clock_gettime(syscall::CLOCK_MONOTONIC, &mut cur_time)
-            .map_err(|e| Error::from_syscall_error(e, "Can't get time"))?;
+        let cur_time = libredox::call::clock_gettime(flag::CLOCK_MONOTONIC)
+            .map_err(|e| Error::from_syscall_error(e.into(), "Can't get time"))?;
 
         // Notify non-blocking sockets
         for (&fd, ref mut file) in &mut self.files {
@@ -345,7 +344,7 @@ where
                     Some(until)
                         if (until.tv_sec < cur_time.tv_sec
                             || (until.tv_sec == cur_time.tv_sec
-                                && until.tv_nsec < cur_time.tv_nsec)) =>
+                                && i64::from(until.tv_nsec) < cur_time.tv_nsec)) =>
                     {
                         self.wait_queue.remove(i);
                         packet.a = (-syscall::ETIMEDOUT) as usize;
