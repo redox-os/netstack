@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::rc::Rc;
 use std::net::Ipv4Addr;
 
+use libredox::flag;
 use syscall::data::TimeSpec;
 use syscall::{Error as SyscallError, EventFlags as SyscallEventFlags, Packet as SyscallPacket, Result as SyscallResult, SchemeMut};
 use syscall;
@@ -430,9 +431,8 @@ impl SchemeMut for Dnsd<'_> {
         }
         let fd = self.next_fd;
         self.next_fd += 1;
-        let mut cur_time = TimeSpec::default();
-        syscall::clock_gettime(syscall::CLOCK_MONOTONIC, &mut cur_time)?;
-        let dns_file = self.domains.file_from_domain(&domain, fd, &cur_time, self.queue);
+        let cur_time = libredox::call::clock_gettime(flag::CLOCK_MONOTONIC)?;
+        let dns_file = self.domains.file_from_domain(&domain, fd, &TimeSpec { tv_sec: cur_time.tv_sec, tv_nsec: cur_time.tv_nsec as i32 }, self.queue);
         self.files.insert(fd, dns_file);
         trace!("Open {} {}", &domain, fd);
         Ok(fd)
@@ -462,11 +462,10 @@ impl SchemeMut for Dnsd<'_> {
             .get_mut(&fd)
             .ok_or_else(|| SyscallError::new(syscall::EBADF))?;
 
-        let mut cur_time = TimeSpec::default();
-        syscall::clock_gettime(syscall::CLOCK_MONOTONIC, &mut cur_time)?;
+        let cur_time = libredox::call::clock_gettime(flag::CLOCK_MONOTONIC)?;
 
         if let DnsFile::Waiting { ref domain } = *file {
-            *file = self.domains.file_from_domain(domain, fd, &cur_time, self.queue);
+            *file = self.domains.file_from_domain(domain, fd, &TimeSpec { tv_sec: cur_time.tv_sec, tv_nsec: cur_time.tv_nsec as i32 }, self.queue);
         }
 
         match *file {
