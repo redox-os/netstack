@@ -344,7 +344,7 @@ where
                     Some(until)
                         if (until.tv_sec < cur_time.tv_sec
                             || (until.tv_sec == cur_time.tv_sec
-                                && i64::from(until.tv_nsec) < cur_time.tv_nsec)) =>
+                                && i64::from(until.tv_nsec) < i64::from(cur_time.tv_nsec))) =>
                     {
                         self.wait_queue.remove(i);
                         packet.a = (-syscall::ETIMEDOUT) as usize;
