@@ -64,36 +64,36 @@ fn get_network_adapter() -> Result<String> {
 fn run(daemon: redox_daemon::Daemon) -> Result<()> {
     let adapter = get_network_adapter()?;
     trace!("opening {adapter}:");
-    let network_fd = Fd::open(&format!("{adapter}:"), O_RDWR | O_NONBLOCK, 0)
+    let network_fd = Fd::open(&format!("/scheme/{adapter}"), O_RDWR | O_NONBLOCK, 0)
         .map_err(|e| anyhow!("failed to open {adapter}: {e}"))?;
 
-    let hardware_addr = std::fs::read(format!("{adapter}:mac"))
+    let hardware_addr = std::fs::read(format!("/scheme/{adapter}/mac"))
         .map(|mac_address| EthernetAddress::from_bytes(&mac_address))
         .context("failed to get mac address from network adapter")?;
 
-    trace!("opening :ip");
-    let ip_fd = Fd::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening /scheme/ip");
+    let ip_fd = Fd::open("/scheme/ip", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :ip")?;
 
-    trace!("opening :udp");
-    let udp_fd = Fd::open(":udp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening /scheme/udp");
+    let udp_fd = Fd::open("/scheme/udp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :udp")?;
 
-    trace!("opening :tcp");
-    let tcp_fd = Fd::open(":tcp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening /scheme/tcp");
+    let tcp_fd = Fd::open("/scheme/tcp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :tcp")?;
 
-    trace!("opening :icmp");
-    let icmp_fd = Fd::open(":icmp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening /scheme/icmp");
+    let icmp_fd = Fd::open("/scheme/icmp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :icmp")?;
 
-    trace!("opening :netcfg");
-    let netcfg_fd = Fd::open(":netcfg", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening /scheme/netcfg");
+    let netcfg_fd = Fd::open("/scheme/netcfg", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :netcfg")?;
 
-    let time_path = format!("time:{}", syscall::CLOCK_MONOTONIC);
+    let time_path = format!("/scheme/time/{}", syscall::CLOCK_MONOTONIC);
     let time_fd = Fd::open(&time_path, O_RDWR, 0)
-        .context("failed to open time:")?;
+        .context("failed to open /scheme/time")?;
 
     event::user_data! {
         enum EventSource {
