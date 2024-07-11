@@ -68,7 +68,7 @@ impl Domains {
     }
 
     pub fn update_nameserver(&mut self) {
-        if let Ok(mut file) = File::open("netcfg:resolv/nameserver") {
+        if let Ok(mut file) = File::open("/scheme/netcfg/resolv/nameserver") {
             let mut nameserver = String::new();
             if file.read_to_string(&mut nameserver).is_ok() {
                 if let Some(line) = nameserver.lines().next() {

@@ -16,15 +16,15 @@ mod scheme;
 fn run(daemon: redox_daemon::Daemon) -> Result<()> {
     use libredox::flag::*;
 
-    let dns_fd = Fd::open(":dns", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    let dns_fd = Fd::open("/scheme/dns", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :dns")?;
 
-    let time_path = format!("time:{}", CLOCK_MONOTONIC);
+    let time_path = format!("/scheme/time/{}", CLOCK_MONOTONIC);
     let time_fd = Fd::open(&time_path, O_RDWR, 0)
         .context("failed to open time")?;
 
     let nameserver_fd = Fd::open(
-        "netcfg:resolv/nameserver",
+        "/scheme/netcfg/resolv/nameserver",
         O_RDWR | O_CREAT | O_NONBLOCK,
         0,
     ).context("failed to open nameserver")?;
