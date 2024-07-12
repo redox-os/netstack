@@ -16,7 +16,7 @@ mod scheme;
 fn run(daemon: redox_daemon::Daemon) -> Result<()> {
     use libredox::flag::*;
 
-    let dns_fd = Fd::open("/scheme/dns", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    let dns_fd = Fd::open(":dns", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :dns")?;
 
     let time_path = format!("/scheme/time/{}", CLOCK_MONOTONIC);
