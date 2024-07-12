@@ -71,24 +71,24 @@ fn run(daemon: redox_daemon::Daemon) -> Result<()> {
         .map(|mac_address| EthernetAddress::from_bytes(&mac_address))
         .context("failed to get mac address from network adapter")?;
 
-    trace!("opening /scheme/ip");
-    let ip_fd = Fd::open("/scheme/ip", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening :ip");
+    let ip_fd = Fd::open(":ip", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :ip")?;
 
-    trace!("opening /scheme/udp");
-    let udp_fd = Fd::open("/scheme/udp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening :udp");
+    let udp_fd = Fd::open(":udp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :udp")?;
 
-    trace!("opening /scheme/tcp");
-    let tcp_fd = Fd::open("/scheme/tcp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening :tcp");
+    let tcp_fd = Fd::open(":tcp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :tcp")?;
 
-    trace!("opening /scheme/icmp");
-    let icmp_fd = Fd::open("/scheme/icmp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening :icmp");
+    let icmp_fd = Fd::open(":icmp", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :icmp")?;
 
-    trace!("opening /scheme/netcfg");
-    let netcfg_fd = Fd::open("/scheme/netcfg", O_RDWR | O_CREAT | O_NONBLOCK, 0)
+    trace!("opening :netcfg");
+    let netcfg_fd = Fd::open(":netcfg", O_RDWR | O_CREAT | O_NONBLOCK, 0)
         .context("failed to open :netcfg")?;
 
     let time_path = format!("/scheme/time/{}", syscall::CLOCK_MONOTONIC);
