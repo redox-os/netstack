@@ -124,7 +124,9 @@ impl EthernetLink {
                 target_hardware_addr,
                 target_protocol_addr,
             } => {
-                if hardware_address != target_hardware_addr {
+                let is_unicast_mac = target_hardware_addr != EMPTY_MAC && !target_hardware_addr.is_broadcast();
+
+                if is_unicast_mac && hardware_address != target_hardware_addr {
                     // Only process packet that are for us
                     return;
                 }
@@ -137,7 +139,7 @@ impl EthernetLink {
                     return;
                 }
 
-                if !ip_addr.contains_addr(&target_protocol_addr) {
+                if ip_addr.address() != target_protocol_addr {
                     return;
                 }
 
