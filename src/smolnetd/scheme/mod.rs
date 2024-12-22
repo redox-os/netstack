@@ -40,8 +40,8 @@ mod udp;
 type SocketSet = SmoltcpSocketSet<'static>;
 type Interface = Rc<RefCell<SmoltcpInterface>>;
 
-const MAX_DURATION: Duration = Duration::from_millis(u64::MAX);
-const MIN_DURATION: Duration = Duration::from_millis(0);
+const MAX_DURATION: Duration = Duration::from_micros(u64::MAX);
+const MIN_DURATION: Duration = Duration::from_micros(0);
 
 pub struct Smolnetd {
     router_device: Tracer<Router>,
@@ -108,11 +108,9 @@ impl Smolnetd {
             "127.0.0.1".parse().unwrap(),
         ));
 
-
-        let mut eth0 = EthernetLink::new(
-            "eth0",
-            unsafe { File::from_raw_fd(network_file.into_raw() as RawFd) },
-        );
+        let mut eth0 = EthernetLink::new("eth0", unsafe {
+            File::from_raw_fd(network_file.into_raw() as RawFd)
+        });
         eth0.set_mac_address(hardware_addr);
 
         devices.borrow_mut().push(loopback);
